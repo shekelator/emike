@@ -7,7 +7,8 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from datetime import date, datetime, timedelta
+from typing import Any, cast
 
 import requests
 
@@ -82,34 +83,19 @@ class WeatherService:
         self._timeout_seconds = timeout_seconds
 
     def current_weather(self, location: str) -> str:
-        geo_params: dict[str, str | int] = {
-            "name": location,
-            "count": 1,
-            "language": "en",
-            "format": "json",
-        }
-        geo_resp = requests.get(
-            "https://geocoding-api.open-meteo.com/v1/search",
-            params=geo_params,
-            timeout=self._timeout_seconds,
-        )
-        geo_resp.raise_for_status()
-        geo = geo_resp.json()
-        results = geo.get("results", [])
-        if not results:
+        resolved = self._resolve_location(location)
+        if resolved is None:
             return f"I could not find weather for {location}."
 
-        top = results[0]
-        latitude = top["latitude"]
-        longitude = top["longitude"]
-        place_name = top.get("name", location)
-        country = top.get("country", "")
+        latitude, longitude, place_name, country, _ = resolved
 
         weather_params: dict[str, str | int | float] = {
             "latitude": latitude,
             "longitude": longitude,
             "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
             "timezone": "auto",
+            "temperature_unit": "fahrenheit",
+            "wind_speed_unit": "mph",
         }
         weather_resp = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -131,8 +117,104 @@ class WeatherService:
         region = f", {country}" if country else ""
         return (
             f"Current weather in {place_name}{region}: {description}, "
-            f"temperature {temp} C, feels like {feels} C, wind {wind} km per hour."
+            f"temperature {temp} F, feels like {feels} F, wind {wind} miles per hour."
         )
+
+    def forecast(self, location: str, forecast_for: str) -> str:
+        resolved = self._resolve_location(location)
+        if resolved is None:
+            return f"I could not find weather for {location}."
+
+        latitude, longitude, place_name, country, timezone_name = resolved
+
+        daily_params: dict[str, str | int | float] = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max",
+            "timezone": timezone_name,
+            "forecast_days": 14,
+            "temperature_unit": "fahrenheit",
+        }
+        forecast_resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params=daily_params,
+            timeout=self._timeout_seconds,
+        )
+        forecast_resp.raise_for_status()
+        payload = forecast_resp.json()
+
+        daily = payload.get("daily", {})
+        times = daily.get("time", [])
+        highs = daily.get("temperature_2m_max", [])
+        lows = daily.get("temperature_2m_min", [])
+        codes = daily.get("weather_code", [])
+        precip_probs = daily.get("precipitation_probability_max", [])
+
+        if not (
+            isinstance(times, list)
+            and isinstance(highs, list)
+            and isinstance(lows, list)
+            and isinstance(codes, list)
+            and isinstance(precip_probs, list)
+        ):
+            return f"I could not fetch forecast data for {location}."
+
+        target = _resolve_forecast_date(forecast_for)
+        if target is None:
+            return (
+                "I could not understand the requested forecast day. "
+                "Try today, tomorrow, a weekday name, or YYYY-MM-DD."
+            )
+        target_iso = target.isoformat()
+
+        if target_iso not in times:
+            return (
+                f"I could not find forecast data for {forecast_for}. "
+                "Forecast range is up to the next 14 days."
+            )
+
+        idx = times.index(target_iso)
+        description = _weather_code_to_text(int(codes[idx]))
+        high = highs[idx]
+        low = lows[idx]
+        precip = precip_probs[idx]
+
+        label = _human_day_label(target)
+        region = f", {country}" if country else ""
+        return (
+            f"Forecast for {label} in {place_name}{region}: {description}. "
+            f"High {high} F and low {low} F. "
+            f"Precipitation chance up to {precip} percent."
+        )
+
+    def _resolve_location(self, location: str) -> tuple[float, float, str, str, str] | None:
+        geo_params: dict[str, str | int] = {
+            "name": location,
+            "count": 1,
+            "language": "en",
+            "format": "json",
+        }
+        geo_resp = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params=geo_params,
+            timeout=self._timeout_seconds,
+        )
+        geo_resp.raise_for_status()
+        geo = geo_resp.json()
+        results = geo.get("results", [])
+        if not isinstance(results, list) or not results:
+            return None
+
+        top = results[0]
+        if not isinstance(top, dict):
+            return None
+
+        latitude = float(top.get("latitude", 0.0))
+        longitude = float(top.get("longitude", 0.0))
+        place_name = str(top.get("name", location))
+        country = str(top.get("country", ""))
+        timezone_name = str(top.get("timezone", "auto"))
+        return latitude, longitude, place_name, country, timezone_name
 
 
 class SearchService:
@@ -286,28 +368,174 @@ class ToolRouter:
             timeout_seconds=config.search_timeout_seconds,
         )
 
-    def maybe_handle(self, user_text: str) -> str | None:
-        text = user_text.strip()
-        low = text.lower()
+    def get_tool_definitions(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
 
-        if "timers" in self._enabled or "timer" in self._enabled:
-            timer_result = self._handle_timers(low, text)
-            if timer_result is not None:
-                return timer_result
-
-        if "weather" in self._enabled and "weather" in low:
-            location = _extract_location(text) or self._default_location
-            return self._weather.current_weather(location)
+        if "weather" in self._enabled:
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get current weather for a specific location.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional city or location name, for example Seattle. "
+                                        "If omitted, uses default location from config."
+                                    ),
+                                }
+                            },
+                        },
+                    },
+                }
+            )
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather_forecast",
+                        "description": (
+                            "Get weather forecast for a target day. "
+                            "Use for questions about tomorrow or weekday highs and lows."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": (
+                                        "Optional city or location name, for example Seattle. "
+                                        "If omitted, uses default location from config."
+                                    ),
+                                },
+                                "forecast_for": {
+                                    "type": "string",
+                                    "description": (
+                                        "Requested day such as today, tomorrow, Thursday, "
+                                        "or YYYY-MM-DD."
+                                    ),
+                                },
+                            },
+                            "required": ["forecast_for"],
+                        },
+                    },
+                }
+            )
 
         if "search" in self._enabled:
-            query = _extract_search_query(text)
-            if query is not None:
-                return self._search.web_search(query)
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web for current information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query text.",
+                                }
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                }
+            )
 
-        return None
+        if "timers" in self._enabled or "timer" in self._enabled:
+            tools.extend(
+                [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "set_timer",
+                            "description": "Create a timer. Provide duration_seconds, or duration_text like '5 minutes'.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "duration_seconds": {
+                                        "type": "integer",
+                                        "description": "Timer length in whole seconds.",
+                                    },
+                                    "duration_text": {
+                                        "type": "string",
+                                        "description": "Timer duration text like '10 minutes'.",
+                                    },
+                                    "label": {
+                                        "type": "string",
+                                        "description": "Optional human label for the timer.",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "list_timers",
+                            "description": "List active timers and remaining seconds.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "cancel_timer",
+                            "description": "Cancel a timer by timer_id.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "timer_id": {
+                                        "type": "string",
+                                        "description": "Timer id returned by set_timer or list_timers.",
+                                    }
+                                },
+                                "required": ["timer_id"],
+                            },
+                        },
+                    },
+                ]
+            )
 
-    def _handle_timers(self, low: str, original: str) -> str | None:
-        if low.startswith("list timers") or "what timers" in low:
+        return tools
+
+    def execute_tool_call(self, tool_name: str, args: dict[str, Any]) -> str:
+        if tool_name == "get_weather":
+            location = str(args.get("location", self._default_location)).strip()
+            if not location:
+                location = self._default_location
+            return self._weather.current_weather(location)
+
+        if tool_name == "get_weather_forecast":
+            location = str(args.get("location", self._default_location)).strip()
+            forecast_for = str(args.get("forecast_for", "tomorrow")).strip()
+            if not location:
+                location = self._default_location
+            if not forecast_for:
+                forecast_for = "tomorrow"
+            return self._weather.forecast(location, forecast_for)
+
+        if tool_name == "web_search":
+            query = str(args.get("query", "")).strip()
+            if not query:
+                return "Missing query for web search."
+            return self._search.web_search(query)
+
+        if tool_name == "set_timer":
+            duration_seconds = _duration_from_args(args)
+            if duration_seconds is None:
+                return "Could not parse timer duration."
+            label = str(args.get("label", "")).strip()
+            timer = self._timers.create_timer(duration_seconds, label)
+            label_suffix = f" ({label})" if label else ""
+            return f"Started timer {timer.timer_id}{label_suffix} for {duration_seconds} seconds."
+
+        if tool_name == "list_timers":
             timers = self._timers.list_timers()
             if not timers:
                 return "No active timers."
@@ -319,26 +547,15 @@ class ToolRouter:
                 lines.append(f"{item.timer_id}{label}: {remaining} seconds remaining")
             return "Active timers: " + "; ".join(lines)
 
-        cancel_match = re.search(r"cancel timer\s+([a-f0-9]{8})", low)
-        if cancel_match:
-            timer_id = cancel_match.group(1)
+        if tool_name == "cancel_timer":
+            timer_id = str(args.get("timer_id", "")).strip().lower()
+            if not timer_id:
+                return "Missing timer_id for cancellation."
             if self._timers.cancel_timer(timer_id):
                 return f"Cancelled timer {timer_id}."
             return f"I could not find timer {timer_id}."
 
-        if "set a timer" in low or "set timer" in low or "start a timer" in low:
-            duration_seconds = _parse_duration_seconds(original)
-            if duration_seconds is None:
-                return "Please say the timer duration, for example set a timer for five minutes."
-            label_match = re.search(r"called\s+(.+)$", original, re.IGNORECASE)
-            label = label_match.group(1).strip() if label_match else ""
-            timer = self._timers.create_timer(duration_seconds, label=label)
-            return (
-                f"Started timer {timer.timer_id} for {duration_seconds} seconds. "
-                "Say list timers to check status."
-            )
-
-        return None
+        return f"Unknown tool '{tool_name}'."
 
 
 def _extract_location(text: str) -> str | None:
@@ -380,6 +597,72 @@ def _parse_duration_seconds(text: str) -> int | None:
         else:
             total += amount
     return total if total > 0 else None
+
+
+def _duration_from_args(args: dict[str, Any]) -> int | None:
+    value = args.get("duration_seconds")
+    if isinstance(value, int):
+        return value if value > 0 else None
+
+    text = args.get("duration_text")
+    if isinstance(text, str):
+        return _parse_duration_seconds(text)
+
+    return None
+
+
+def _resolve_forecast_date(value: str) -> date | None:
+    text = value.strip().lower()
+    if not text:
+        return None
+
+    today = datetime.now().date()
+    if text == "today":
+        return today
+    if text == "tomorrow":
+        return today + timedelta(days=1)
+
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        pass
+
+    weekdays = {
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
+    }
+
+    if text in weekdays:
+        target_weekday = weekdays[text]
+        delta = (target_weekday - today.weekday()) % 7
+        if delta == 0:
+            delta = 7
+        return today + timedelta(days=delta)
+
+    if text.startswith("next "):
+        day_name = text[5:]
+        if day_name in weekdays:
+            target_weekday = weekdays[day_name]
+            delta = (target_weekday - today.weekday()) % 7
+            if delta == 0:
+                delta = 7
+            return today + timedelta(days=delta)
+
+    return None
+
+
+def _human_day_label(target: date) -> str:
+    today = datetime.now().date()
+    if target == today:
+        return "today"
+    if target == today + timedelta(days=1):
+        return "tomorrow"
+    return target.strftime("%A")
 
 
 def _weather_code_to_text(code: int) -> str:

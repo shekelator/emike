@@ -32,7 +32,7 @@ enabled_tools:
   - search
   - timers
 
-default_location: Seattle
+default_location: Jamaica Plain, MA 02130
 search_provider: auto
 search_api_key_env: BRAVE_API_KEY
 firecrawl_api_key_env: FIRECRAWL_API_KEY

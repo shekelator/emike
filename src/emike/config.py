@@ -45,7 +45,7 @@ class AppConfig:
     tts: TTSConfig
     hardware: HardwareConfig
     enabled_tools: list[str]
-    default_location: str = "Seattle"
+    default_location: str = "Jamaica Plain, MA 02130"
     search_provider: str = "auto"
     search_api_key_env: str = "BRAVE_API_KEY"
     firecrawl_api_key_env: str = "FIRECRAWL_API_KEY"
@@ -119,7 +119,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             led_gpio=(None if hw_raw.get("led_gpio") is None else int(hw_raw["led_gpio"])),
         ),
         enabled_tools=[str(tool).strip() for tool in enabled_tools_raw],
-        default_location=str(raw.get("default_location", "Seattle")),
+        default_location=str(raw.get("default_location", "Jamaica Plain, MA 02130")),
         search_provider=str(raw.get("search_provider", "auto")),
         search_api_key_env=str(raw.get("search_api_key_env", "BRAVE_API_KEY")),
         firecrawl_api_key_env=str(raw.get("firecrawl_api_key_env", "FIRECRAWL_API_KEY")),

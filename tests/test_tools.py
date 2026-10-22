@@ -1,4 +1,11 @@
-from emike.tools import _extract_location, _extract_search_query, _parse_duration_seconds
+from datetime import datetime, timedelta
+
+from emike.tools import (
+    _extract_location,
+    _extract_search_query,
+    _parse_duration_seconds,
+    _resolve_forecast_date,
+)
 
 
 def test_parse_duration_seconds_multiple_units() -> None:
@@ -11,3 +18,14 @@ def test_extract_weather_location() -> None:
 
 def test_extract_search_query() -> None:
     assert _extract_search_query("search for raspberry pi audio setup") == "raspberry pi audio setup"
+
+
+def test_resolve_forecast_date_tomorrow() -> None:
+    today = datetime.now().date()
+    assert _resolve_forecast_date("tomorrow") == today + timedelta(days=1)
+
+
+def test_resolve_forecast_date_weekday() -> None:
+    resolved = _resolve_forecast_date("thursday")
+    assert resolved is not None
+    assert resolved.weekday() == 3

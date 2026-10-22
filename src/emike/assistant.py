@@ -92,11 +92,11 @@ class AssistantRuntime:
             self._state.history.append(ChatMessage(role="user", content=user_text))
 
             try:
-                tool_reply = self._tools.maybe_handle(user_text)
-                if tool_reply is not None:
-                    reply = tool_reply
-                else:
-                    reply = self._llm.complete(self._state.history, request_id=request_id)
+                reply = self._llm.complete(
+                    self._state.history,
+                    request_id=request_id,
+                    tool_router=self._tools,
+                )
             except (RuntimeError, requests.RequestException) as exc:
                 LOGGER.error(
                     "Assistant generation error",

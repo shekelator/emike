@@ -84,9 +84,18 @@ Edit .env:
 ## Weather, search, and timer support
 These capabilities are now included in runtime.
 
+Tool invocation model:
+- Weather, search, and timer actions are exposed to the LLM as callable tools.
+- The LLM can call one or more tools, inspect results, and then produce a final user-facing response.
+
 Weather:
 - Uses Open-Meteo geocoding + forecast APIs.
 - Requires outbound internet access.
+- Temperature defaults to Fahrenheit in responses.
+- Supports current conditions and forecast queries.
+- Forecasts support today, tomorrow, weekday names (for example Thursday), and YYYY-MM-DD.
+- Forecast responses include high and low temperatures.
+- If location is omitted, weather tools use default_location (default: Jamaica Plain, MA 02130).
 
 Search:
 - Uses Firecrawl first when FIRECRAWL_API_KEY is present (or when search_provider is firecrawl).

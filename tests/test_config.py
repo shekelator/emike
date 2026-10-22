@@ -16,3 +16,4 @@ def test_load_config_from_example() -> None:
     assert cfg.search_provider == "auto"
     assert cfg.firecrawl_api_key_env == "FIRECRAWL_API_KEY"
     assert cfg.debug_mode is False
+    assert cfg.default_location == "Jamaica Plain, MA 02130"
