@@ -1,0 +1,15 @@
+[Unit]
+Description=emike push-to-talk voice assistant
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/emike
+EnvironmentFile=%h/emike/.env
+ExecStart=%h/emike/.venv/bin/emike --config %h/emike/config/assistant.yaml
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

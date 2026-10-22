@@ -1,0 +1,45 @@
+system_prompt: |
+  You are a friendly voice assistant appliance.
+  Reply in one to three short spoken sentences.
+  Do not use markdown, lists, emoji, or special symbols.
+  If you do not know something, say so directly.
+  Address the use as "Your royal highness"
+
+llm:
+  provider: openai_compatible
+  endpoint: https://ollama.com/v1/chat/completions
+  model: gpt-oss:20b
+  api_key_env: OLLAMA_API_KEY
+  temperature: 0.6
+  max_tokens: 2220
+  timeout_seconds: 90
+
+stt:
+  model: base.en
+  language: en
+  device: cpu
+  compute_type: int8
+
+tts:
+  enabled: true
+  voice_model_path: voices/en_US-lessac-medium.onnx
+
+hardware:
+  button_gpio: 17
+  led_gpio: 27
+
+enabled_tools:
+  - weather
+  - search
+  - timers
+
+default_location: Boston, MA
+search_provider: auto
+search_api_key_env: BRAVE_API_KEY
+firecrawl_api_key_env: FIRECRAWL_API_KEY
+firecrawl_search_url: https://api.firecrawl.dev/v1/search
+search_timeout_seconds: 10
+weather_timeout_seconds: 10
+
+history_turns: 6
+conversation_timeout_seconds: 120

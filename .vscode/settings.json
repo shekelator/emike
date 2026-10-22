@@ -1,0 +1,6 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/Users/dave/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/bin/python": true,
+        "pip": true
+    }
+}
