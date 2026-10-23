@@ -13,7 +13,7 @@ class LLMConfig:
     api_key_env: str = "LLM_API_KEY"
     provider: str = "openai_compatible"
     temperature: float = 0.6
-    max_tokens: int = 220
+    max_tokens: int = 500
     timeout_seconds: int = 90
 
 
@@ -28,7 +28,10 @@ class STTConfig:
 @dataclass(slots=True)
 class TTSConfig:
     enabled: bool = True
-    voice_model_path: str = "voices/en_US-lessac-medium.onnx"
+    voice_name: str = "en_US-lessac-medium"
+    voices_dir: str = "voices"
+    auto_download_voice: bool = True
+    voice_model_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -93,6 +96,15 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     if not isinstance(enabled_tools_raw, list):
         raise TypeError("enabled_tools must be a list")
 
+    legacy_voice_model_path = tts_raw.get("voice_model_path")
+    voice_model_path: str | None = None
+    if isinstance(legacy_voice_model_path, str) and legacy_voice_model_path.strip():
+        voice_model_path = legacy_voice_model_path.strip()
+
+    inferred_voice_name = "en_US-lessac-medium"
+    if voice_model_path and voice_model_path.endswith(".onnx"):
+        inferred_voice_name = Path(voice_model_path).stem
+
     return AppConfig(
         system_prompt=str(_require(raw, "system_prompt")).strip(),
         llm=LLMConfig(
@@ -101,7 +113,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             api_key_env=str(llm_raw.get("api_key_env", "LLM_API_KEY")),
             provider=str(llm_raw.get("provider", "openai_compatible")),
             temperature=float(llm_raw.get("temperature", 0.6)),
-            max_tokens=int(llm_raw.get("max_tokens", 220)),
+            max_tokens=int(llm_raw.get("max_tokens", 500)),
             timeout_seconds=int(llm_raw.get("timeout_seconds", 90)),
         ),
         stt=STTConfig(
@@ -112,7 +124,10 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         ),
         tts=TTSConfig(
             enabled=bool(tts_raw.get("enabled", True)),
-            voice_model_path=str(tts_raw.get("voice_model_path", "voices/en_US-lessac-medium.onnx")),
+            voice_name=str(tts_raw.get("voice_name", inferred_voice_name)),
+            voices_dir=str(tts_raw.get("voices_dir", "voices")),
+            auto_download_voice=bool(tts_raw.get("auto_download_voice", True)),
+            voice_model_path=voice_model_path,
         ),
         hardware=HardwareConfig(
             button_gpio=int(hw_raw.get("button_gpio", 17)),

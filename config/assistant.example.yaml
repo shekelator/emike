@@ -10,7 +10,7 @@ llm:
   model: gpt-oss:20b
   api_key_env: OLLAMA_API_KEY
   temperature: 0.6
-  max_tokens: 220
+  max_tokens: 500
   timeout_seconds: 90
 
 stt:
@@ -21,7 +21,11 @@ stt:
 
 tts:
   enabled: true
-  voice_model_path: voices/en_US-lessac-medium.onnx
+  voice_name: en_US-lessac-medium
+  voices_dir: voices
+  auto_download_voice: true
+  # Optional legacy override:
+  # voice_model_path: voices/en_US-lessac-medium.onnx
 
 hardware:
   button_gpio: 17

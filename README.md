@@ -68,8 +68,17 @@ Edit config/assistant.yaml:
 - llm.api_key_env: environment variable with API key
 - stt.model: local Whisper model size (base.en default)
 - tts.voice_model_path: path to Piper voice model file
+- tts.voice_name: Piper voice name, for example en_US-lessac-medium
+- tts.voices_dir: directory where voice files are stored/downloaded
+- tts.auto_download_voice: when true, missing configured voice is downloaded on startup
+- tts.voice_model_path: optional legacy explicit model path override
 - enabled_tools: weather, search, timers
 - default_location: fallback location for weather queries
+
+## TTS voice management
+- Voice binaries are not committed to git.
+- On startup, when TTS is enabled and the configured voice file is missing, emike auto-downloads it (if `tts.auto_download_voice` is true).
+- Recommended config style is by voice name (`tts.voice_name`) rather than hardcoded file path.
 - search_provider: auto, firecrawl, brave, or duckduckgo
 - firecrawl_api_key_env: env var used for Firecrawl search
 - firecrawl_search_url: Firecrawl search endpoint URL
@@ -192,3 +201,8 @@ Notes:
 
 ## Design document
 See design.md for product scope, architecture, security/privacy assumptions, and phased next steps.
+
+## Testing the button
+```
+python3 -c "from gpiozero import Button; b=Button(17); b.wait_for_press(); print('pressed'); b.wait_for_release(); print('released')"
+```

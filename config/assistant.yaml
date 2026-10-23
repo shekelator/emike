@@ -12,8 +12,8 @@ llm:
   # model: gpt-oss:20b
   model: glm-5.3-flash:cloud
   api_key_env: OLLAMA_API_KEY
-  temperature: 0.6
-  max_tokens: 2220
+  temperature: 0.3
+  max_tokens: 500
   timeout_seconds: 90
 
 stt:
@@ -24,9 +24,11 @@ stt:
 
 tts:
   enabled: true
-  voice_model_path: voices/en_US-lessac-medium.onnx
-  # voice_model_path: voices/en_US-amy-medium.onnx
-  # voice_model_path: voices/en_US-ryan-high.onnx
+  voice_name: en_US-ryan-high
+  # en_US-lessac-mediumonnx
+  # en_US-amy-medium
+  voices_dir: voices
+  auto_download_voice: true
 
 hardware:
   button_gpio: 17

@@ -35,7 +35,7 @@ class AssistantRuntime:
         self._audio = AudioRecorder()
         self._stt = SpeechToText(config.stt)
         self._llm = LLMClient(config.llm, config.system_prompt)
-        self._tts = TextToSpeech(config.tts.voice_model_path)
+        self._tts = TextToSpeech(config.tts)
         self._tools = ToolRouter(config, on_timer_elapsed=self._on_timer_elapsed)
         self._state = ConversationState()
 

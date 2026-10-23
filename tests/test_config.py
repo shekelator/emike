@@ -8,8 +8,12 @@ def test_load_config_from_example() -> None:
 
     assert cfg.system_prompt
     assert cfg.llm.endpoint.startswith("https://")
+    assert cfg.llm.max_tokens == 500
     assert cfg.stt.model
     assert cfg.hardware.button_gpio == 17
+    assert cfg.tts.voice_name == "en_US-lessac-medium"
+    assert cfg.tts.auto_download_voice is True
+    assert cfg.tts.voice_model_path is None
     assert "weather" in cfg.enabled_tools
     assert "search" in cfg.enabled_tools
     assert "timers" in cfg.enabled_tools
