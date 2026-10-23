@@ -165,6 +165,22 @@ On every push and pull request:
 - Builds sdist and wheel artifacts after quality checks pass.
 - Uploads build artifacts for inspection.
 
+## GitHub Releases
+The repository also includes a release workflow at .github/workflows/release.yml.
+
+How it works:
+- Triggers on tags like v0.1.0.
+- Validates that the tag version matches project.version in pyproject.toml.
+- Builds wheel and sdist.
+- Publishes a GitHub Release and attaches dist artifacts.
+
+Create the first release (v0.1.0):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Devcontainer
 If you use VS Code Dev Containers, open the repository in container. The container installs Python tooling and package dependencies automatically.
 
