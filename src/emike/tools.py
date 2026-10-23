@@ -569,29 +569,6 @@ class ToolRouter:
         return f"Unknown tool '{tool_name}'."
 
 
-def _extract_location(text: str) -> str | None:
-    match = re.search(r"\bweather\b(?:\s+in\s+|\s+for\s+)(.+)$", text, re.IGNORECASE)
-    if not match:
-        return None
-    location = match.group(1).strip(" ?!.,")
-    return location or None
-
-
-def _extract_search_query(text: str) -> str | None:
-    patterns = [
-        r"^search for\s+(.+)$",
-        r"^look up\s+(.+)$",
-        r"^find on web\s+(.+)$",
-        r"^web search\s+(.+)$",
-    ]
-    for pattern in patterns:
-        match = re.match(pattern, text, re.IGNORECASE)
-        if match:
-            query = match.group(1).strip(" ?!.,")
-            return query or None
-    return None
-
-
 def _parse_duration_seconds(text: str) -> int | None:
     matches = list(_DURATION_PATTERN.finditer(text))
     if not matches:
