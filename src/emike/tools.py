@@ -81,11 +81,13 @@ class TimerManager:
 class WeatherService:
     def __init__(self, timeout_seconds: int) -> None:
         self._timeout_seconds = timeout_seconds
+        self._location_cache: dict[str, tuple[float, float, str, str, str]] = {}
+        self._cache_lock = threading.Lock()
 
     def current_weather(self, location: str) -> str:
         resolved = self._resolve_location(location)
         if resolved is None:
-            return f"I could not find weather for {location}."
+            return f"I could not find that location: {location}."
 
         latitude, longitude, place_name, country, _ = resolved
 
@@ -123,7 +125,7 @@ class WeatherService:
     def forecast(self, location: str, forecast_for: str) -> str:
         resolved = self._resolve_location(location)
         if resolved is None:
-            return f"I could not find weather for {location}."
+            return f"I could not find that location: {location}."
 
         latitude, longitude, place_name, country, timezone_name = resolved
 
@@ -188,6 +190,12 @@ class WeatherService:
         )
 
     def _resolve_location(self, location: str) -> tuple[float, float, str, str, str] | None:
+        cache_key = _location_cache_key(location)
+        with self._cache_lock:
+            cached = self._location_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         geo_params: dict[str, str | int] = {
             "name": location,
             "count": 1,
@@ -214,7 +222,10 @@ class WeatherService:
         place_name = str(top.get("name", location))
         country = str(top.get("country", ""))
         timezone_name = str(top.get("timezone", "auto"))
-        return latitude, longitude, place_name, country, timezone_name
+        resolved = (latitude, longitude, place_name, country, timezone_name)
+        with self._cache_lock:
+            self._location_cache[cache_key] = resolved
+        return resolved
 
 
 class SearchService:
@@ -663,6 +674,10 @@ def _human_day_label(target: date) -> str:
     if target == today + timedelta(days=1):
         return "tomorrow"
     return target.strftime("%A")
+
+
+def _location_cache_key(location: str) -> str:
+    return " ".join(location.strip().lower().split())
 
 
 def _weather_code_to_text(code: int) -> str:

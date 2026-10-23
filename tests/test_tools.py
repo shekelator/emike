@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from emike.tools import (
     _extract_location,
     _extract_search_query,
+    _location_cache_key,
     _parse_duration_seconds,
     _resolve_forecast_date,
 )
@@ -29,3 +30,7 @@ def test_resolve_forecast_date_weekday() -> None:
     resolved = _resolve_forecast_date("thursday")
     assert resolved is not None
     assert resolved.weekday() == 3
+
+
+def test_location_cache_key_normalizes_spacing_and_case() -> None:
+    assert _location_cache_key("  Jamaica   Plain, MA   02130 ") == "jamaica plain, ma 02130"

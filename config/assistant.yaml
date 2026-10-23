@@ -3,12 +3,14 @@ system_prompt: |
   Reply in one to three short spoken sentences.
   Do not use markdown, lists, emoji, or special symbols.
   If you do not know something, say so directly.
-  Address the user as "Mort"
+  When we ask for the weather, use the default location if none is specified. Always include high and low temperature for the day requested.
+  When you need to address the user, call them "Mort"
 
 llm:
   provider: openai_compatible
   endpoint: https://ollama.com/v1/chat/completions
-  model: gpt-oss:20b
+  # model: gpt-oss:20b
+  model: glm-5.3-flash:cloud
   api_key_env: OLLAMA_API_KEY
   temperature: 0.6
   max_tokens: 2220
@@ -23,6 +25,8 @@ stt:
 tts:
   enabled: true
   voice_model_path: voices/en_US-lessac-medium.onnx
+  # voice_model_path: voices/en_US-amy-medium.onnx
+  # voice_model_path: voices/en_US-ryan-high.onnx
 
 hardware:
   button_gpio: 17
