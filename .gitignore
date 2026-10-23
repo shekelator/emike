@@ -225,3 +225,6 @@ __marimo__/
 # Local Piper voice assets (large generated/downloaded binaries)
 voices/*.onnx
 voices/*.onnx.json
+
+# Local runtime configuration (copy from template)
+config/assistant.yaml

@@ -67,7 +67,6 @@ Edit config/assistant.yaml:
 - llm.model: provider model name
 - llm.api_key_env: environment variable with API key
 - stt.model: local Whisper model size (base.en default)
-- tts.voice_model_path: path to Piper voice model file
 - tts.voice_name: Piper voice name, for example en_US-lessac-medium
 - tts.voices_dir: directory where voice files are stored/downloaded
 - tts.auto_download_voice: when true, missing configured voice is downloaded on startup
