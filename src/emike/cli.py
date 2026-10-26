@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from emike.assistant import AssistantRuntime
-from emike.button import GPIOButton, KeyboardButton
+from emike.button import KeyboardButton, KeyboardOrGPIOButton
 from emike.config import DEFAULT_CONFIG_PATH, load_config
 from emike.logging_utils import configure_logging
 
@@ -34,7 +34,9 @@ def main() -> None:
     if not args.keyboard and os.name != "posix":
         raise RuntimeError("GPIO mode requires Linux on Raspberry Pi. Use --keyboard.")
 
-    button = KeyboardButton() if args.keyboard else GPIOButton(config.hardware.button_gpio)
+    button = (
+        KeyboardButton() if args.keyboard else KeyboardOrGPIOButton(config.hardware.button_gpio)
+    )
     runtime = AssistantRuntime(config=config, button=button)
     runtime.run_forever()
 
