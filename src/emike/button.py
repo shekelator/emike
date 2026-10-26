@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 import threading
+
+logger = logging.getLogger(__name__)
 
 
 class ButtonInterface:
@@ -43,17 +46,25 @@ class KeyboardOrGPIOButton(ButtonInterface):
     """Accept either keyboard input or the real GPIO button as a trigger."""
 
     def __init__(self, pin: int) -> None:
-        self._gpio_button = GPIOButton(pin)
+        self._gpio_button: GPIOButton | None
+        try:
+            self._gpio_button = GPIOButton(pin)
+        except (ImportError, OSError, RuntimeError) as exc:
+            self._gpio_button = None
+            logger.warning(
+                "GPIO button unavailable for pin %s; using keyboard fallback only (%s)",
+                pin,
+                exc,
+            )
         self._keyboard_button = KeyboardButton()
         self._press_event = threading.Event()
         self._release_event = threading.Event()
 
-        for target in (
-            self._wait_for_gpio_press,
-            self._wait_for_gpio_release,
-            self._wait_for_keyboard_press,
-            self._wait_for_keyboard_release,
-        ):
+        targets = [self._wait_for_keyboard_press, self._wait_for_keyboard_release]
+        if self._gpio_button is not None:
+            targets.extend((self._wait_for_gpio_press, self._wait_for_gpio_release))
+
+        for target in targets:
             thread = threading.Thread(target=target, daemon=True)
             thread.start()
 

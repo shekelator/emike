@@ -38,3 +38,16 @@ def test_keyboard_or_gpio_button_waits_for_release() -> None:
 
     assert button._release_event.is_set()
     thread.join(timeout=1)
+
+
+def test_keyboard_or_gpio_button_falls_back_when_gpio_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "emike.button.GPIOButton",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("gpio init failed")),
+    )
+    monkeypatch.setattr("emike.button.KeyboardButton.wait_for_press", lambda self: None)
+    monkeypatch.setattr("emike.button.KeyboardButton.wait_for_release", lambda self: None)
+
+    button = KeyboardOrGPIOButton(pin=17)
+
+    assert button._gpio_button is None
