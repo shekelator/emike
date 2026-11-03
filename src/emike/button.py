@@ -104,4 +104,5 @@ class KeyboardOrGPIOButton(ButtonInterface):
         self._releases.acquire()
 
     def close(self) -> None:
-        self._gpio_button.close()
+        if self._gpio_button is not None:
+            self._gpio_button.close()
