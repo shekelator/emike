@@ -12,6 +12,9 @@ class ButtonInterface:
     def wait_for_release(self) -> None:
         raise NotImplementedError
 
+    def close(self) -> None:
+        """Release any underlying resources."""
+
 
 class GPIOButton(ButtonInterface):
     def __init__(self, pin: int) -> None:
@@ -24,6 +27,9 @@ class GPIOButton(ButtonInterface):
 
     def wait_for_release(self) -> None:
         self._button.wait_for_release()
+
+    def close(self) -> None:
+        self._button.close()
 
 
 class KeyboardButton(ButtonInterface):
@@ -38,6 +44,9 @@ class KeyboardButton(ButtonInterface):
     def wait_for_release(self) -> None:
         input("Press Enter to stop recording...")
 
+    def close(self) -> None:
+        return None
+
 
 class KeyboardOrGPIOButton(ButtonInterface):
     """Accept either keyboard input or the real GPIO button as a trigger."""
@@ -45,8 +54,8 @@ class KeyboardOrGPIOButton(ButtonInterface):
     def __init__(self, pin: int) -> None:
         self._gpio_button = GPIOButton(pin)
         self._keyboard_button = KeyboardButton()
-        self._press_event = threading.Event()
-        self._release_event = threading.Event()
+        self._presses = threading.Semaphore(0)
+        self._releases = threading.Semaphore(0)
 
         for target in (
             self._wait_for_gpio_press,
@@ -58,25 +67,30 @@ class KeyboardOrGPIOButton(ButtonInterface):
             thread.start()
 
     def _wait_for_gpio_press(self) -> None:
-        self._gpio_button.wait_for_press()
-        self._press_event.set()
+        while True:
+            self._gpio_button.wait_for_press()
+            self._presses.release()
 
     def _wait_for_gpio_release(self) -> None:
-        self._gpio_button.wait_for_release()
-        self._release_event.set()
+        while True:
+            self._gpio_button.wait_for_release()
+            self._releases.release()
 
     def _wait_for_keyboard_press(self) -> None:
-        self._keyboard_button.wait_for_press()
-        self._press_event.set()
+        while True:
+            self._keyboard_button.wait_for_press()
+            self._presses.release()
 
     def _wait_for_keyboard_release(self) -> None:
-        self._keyboard_button.wait_for_release()
-        self._release_event.set()
+        while True:
+            self._keyboard_button.wait_for_release()
+            self._releases.release()
 
     def wait_for_press(self) -> None:
-        self._press_event.clear()
-        self._press_event.wait()
+        self._presses.acquire()
 
     def wait_for_release(self) -> None:
-        self._release_event.clear()
-        self._release_event.wait()
+        self._releases.acquire()
+
+    def close(self) -> None:
+        self._gpio_button.close()

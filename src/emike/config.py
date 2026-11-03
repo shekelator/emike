@@ -32,6 +32,7 @@ class TTSConfig:
     voices_dir: str = "voices"
     auto_download_voice: bool = True
     voice_model_path: str | None = None
+    aplay_device: str | None = None
 
 
 @dataclass(slots=True)
@@ -101,6 +102,11 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     if isinstance(legacy_voice_model_path, str) and legacy_voice_model_path.strip():
         voice_model_path = legacy_voice_model_path.strip()
 
+    configured_aplay_device = tts_raw.get("aplay_device")
+    aplay_device: str | None = None
+    if isinstance(configured_aplay_device, str) and configured_aplay_device.strip():
+        aplay_device = configured_aplay_device.strip()
+
     inferred_voice_name = "en_US-lessac-medium"
     if voice_model_path and voice_model_path.endswith(".onnx"):
         inferred_voice_name = Path(voice_model_path).stem
@@ -128,6 +134,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             voices_dir=str(tts_raw.get("voices_dir", "voices")),
             auto_download_voice=bool(tts_raw.get("auto_download_voice", True)),
             voice_model_path=voice_model_path,
+            aplay_device=aplay_device,
         ),
         hardware=HardwareConfig(
             button_gpio=int(hw_raw.get("button_gpio", 17)),

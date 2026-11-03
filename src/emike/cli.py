@@ -38,7 +38,12 @@ def main() -> None:
         KeyboardButton() if args.keyboard else KeyboardOrGPIOButton(config.hardware.button_gpio)
     )
     runtime = AssistantRuntime(config=config, button=button)
-    runtime.run_forever()
+    try:
+        runtime.run_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        button.close()
 
 
 if __name__ == "__main__":

@@ -70,6 +70,7 @@ Edit config/assistant.yaml:
 - tts.voice_name: Piper voice name, for example en_US-lessac-medium
 - tts.voices_dir: directory where voice files are stored/downloaded
 - tts.auto_download_voice: when true, missing configured voice is downloaded on startup
+- tts.aplay_device: optional ALSA playback target, for example plughw:2,0 on Raspberry Pi
 - tts.voice_model_path: optional legacy explicit model path override
 - enabled_tools: weather, search, timers
 - default_location: fallback location for weather queries

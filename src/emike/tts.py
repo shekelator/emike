@@ -14,6 +14,7 @@ class TextToSpeech:
         self._voice_name = config.voice_name
         self._voices_dir = Path(config.voices_dir)
         self._auto_download_voice = config.auto_download_voice
+        self._aplay_device = config.aplay_device
         if config.voice_model_path:
             self._voice_model_path = Path(config.voice_model_path)
         else:
@@ -75,11 +76,23 @@ class TextToSpeech:
 
     def _play_audio(self, wav_path: str) -> None:
         if shutil.which("aplay"):
-            subprocess.run(["aplay", "-q", wav_path], check=True)
+            command = ["aplay", "-q"]
+            if self._aplay_device:
+                command.extend(["-D", self._aplay_device])
+            command.append(wav_path)
+            try:
+                subprocess.run(command, check=True, capture_output=True)
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+                raise RuntimeError(f"Audio playback with aplay failed: {stderr.strip()}") from exc
             return
 
         if shutil.which("afplay"):
-            subprocess.run(["afplay", wav_path], check=True)
+            try:
+                subprocess.run(["afplay", wav_path], check=True, capture_output=True)
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+                raise RuntimeError(f"Audio playback with afplay failed: {stderr.strip()}") from exc
             return
 
         raise RuntimeError("No supported audio player found. Install aplay (Linux) or use macOS afplay.")

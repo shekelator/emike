@@ -24,6 +24,8 @@ tts:
   voice_name: en_US-lessac-medium
   voices_dir: voices
   auto_download_voice: true
+  # Optional ALSA output override for Raspberry Pi, e.g. plughw:2,0
+  # aplay_device: plughw:2,0
   # Optional legacy override:
   # voice_model_path: voices/en_US-lessac-medium.onnx
 
