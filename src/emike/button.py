@@ -78,13 +78,21 @@ class KeyboardOrGPIOButton(ButtonInterface):
             thread.start()
 
     def _wait_for_gpio_press(self) -> None:
+        gpio_button = self._gpio_button
+        if gpio_button is None:
+            return
+
         while True:
-            self._gpio_button.wait_for_press()
+            gpio_button.wait_for_press()
             self._presses.release()
 
     def _wait_for_gpio_release(self) -> None:
+        gpio_button = self._gpio_button
+        if gpio_button is None:
+            return
+
         while True:
-            self._gpio_button.wait_for_release()
+            gpio_button.wait_for_release()
             self._releases.release()
 
     def _wait_for_keyboard_press(self) -> None:
