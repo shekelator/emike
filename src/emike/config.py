@@ -53,7 +53,7 @@ class AppConfig:
     search_provider: str = "auto"
     search_api_key_env: str = "BRAVE_API_KEY"
     firecrawl_api_key_env: str = "FIRECRAWL_API_KEY"
-    firecrawl_search_url: str = "https://api.firecrawl.dev/v1/search"
+    firecrawl_search_url: str = "https://api.firecrawl.dev/v2/search"
     search_timeout_seconds: int = 10
     weather_timeout_seconds: int = 10
     debug_mode: bool = False
@@ -146,7 +146,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         search_api_key_env=str(raw.get("search_api_key_env", "BRAVE_API_KEY")),
         firecrawl_api_key_env=str(raw.get("firecrawl_api_key_env", "FIRECRAWL_API_KEY")),
         firecrawl_search_url=str(
-            raw.get("firecrawl_search_url", "https://api.firecrawl.dev/v1/search")
+            raw.get("firecrawl_search_url", "https://api.firecrawl.dev/v2/search")
         ),
         search_timeout_seconds=int(raw.get("search_timeout_seconds", 10)),
         weather_timeout_seconds=int(raw.get("weather_timeout_seconds", 10)),

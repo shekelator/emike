@@ -81,7 +81,7 @@ Edit config/assistant.yaml:
 - Recommended config style is by voice name (`tts.voice_name`) rather than hardcoded file path.
 - search_provider: auto, firecrawl, brave, or duckduckgo
 - firecrawl_api_key_env: env var used for Firecrawl search
-- firecrawl_search_url: Firecrawl search endpoint URL
+- firecrawl_search_url: Firecrawl v2 search endpoint URL
 - search_api_key_env: env var used by Brave search
 - debug_mode: set true to enable DEBUG-level structured logs
 

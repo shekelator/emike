@@ -283,12 +283,20 @@ class SearchService:
         resp.raise_for_status()
         parsed = resp.json()
 
-        data = parsed.get("data", [])
-        if not isinstance(data, list) or not data:
+        data = parsed.get("data", {})
+        web_results: list[object]
+        if isinstance(data, dict):
+            web_results = cast(list[object], data.get("web", []))
+        elif isinstance(data, list):
+            web_results = data
+        else:
+            web_results = []
+
+        if not isinstance(web_results, list) or not web_results:
             return f"No search results found for {query}."
 
         lines = []
-        for item in data[:3]:
+        for item in web_results[:3]:
             if not isinstance(item, dict):
                 continue
             metadata = item.get("metadata", {})

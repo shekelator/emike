@@ -42,7 +42,7 @@ default_location: Jamaica Plain, MA 02130
 search_provider: auto
 search_api_key_env: BRAVE_API_KEY
 firecrawl_api_key_env: FIRECRAWL_API_KEY
-firecrawl_search_url: https://api.firecrawl.dev/v1/search
+firecrawl_search_url: https://api.firecrawl.dev/v2/search
 search_timeout_seconds: 10
 weather_timeout_seconds: 10
 debug_mode: false
