@@ -30,11 +30,13 @@ class MicStreamer:
         out_queue: asyncio.Queue[bytes],
         sample_rate_hz: int = 16_000,
         chunk_ms: int = 60,
+        device: str | int | None = None,
     ) -> None:
         self._loop = loop
         self._out_queue = out_queue
         self._sample_rate_hz = sample_rate_hz
         self._chunk_ms = chunk_ms
+        self._device = device
         self._stream: sd.InputStream | None = None
 
     def start(self) -> None:
@@ -44,6 +46,7 @@ class MicStreamer:
             channels=1,
             dtype="int16",
             blocksize=blocksize,
+            device=self._device,
             callback=_make_callback(self._loop, self._out_queue),
         )
         self._stream.start()

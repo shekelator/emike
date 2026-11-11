@@ -46,6 +46,8 @@ class SonicConfig:
 class HardwareConfig:
     button_gpio: int = 17
     led_gpio: int | None = 27
+    input_device: str | int | None = None
+    output_device: str | int | None = None
 
 
 @dataclass(slots=True)
@@ -118,6 +120,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         hardware=HardwareConfig(
             button_gpio=int(hw_raw.get("button_gpio", 17)),
             led_gpio=(None if hw_raw.get("led_gpio") is None else int(hw_raw["led_gpio"])),
+            input_device=(None if hw_raw.get("input_device") is None else hw_raw["input_device"]),
+            output_device=(None if hw_raw.get("output_device") is None else hw_raw["output_device"]),
         ),
         enabled_tools=[str(tool).strip() for tool in enabled_tools_raw],
         default_location=str(raw.get("default_location", "Jamaica Plain, MA 02130")),

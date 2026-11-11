@@ -180,14 +180,18 @@ class AssistantRuntime:
     async def _run_turn_once(self, request_id: str, model_id: str) -> None:
         """One full turn on one session; raise instead of swallowing errors."""
         config = self._config.sonic
+        hardware = self._config.hardware
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
         mic = MicStreamer(
             asyncio.get_running_loop(),
             mic_queue,
             config.input_sample_rate_hz,
             config.chunk_ms,
+            device=hardware.input_device,
         )
-        playback = PlaybackQueue(config.output_sample_rate_hz, config.prebuffer_ms)
+        playback = PlaybackQueue(
+            config.output_sample_rate_hz, config.prebuffer_ms, hardware.output_device
+        )
         prompt_name = uuid.uuid4().hex
         content_name = uuid.uuid4().hex
         baseline = self._releases.count()
@@ -272,8 +276,11 @@ class AssistantRuntime:
             mic_queue,
             config.input_sample_rate_hz,
             config.chunk_ms,
+            device=self._config.hardware.input_device,
         )
-        playback = PlaybackQueue(config.output_sample_rate_hz, config.prebuffer_ms)
+        playback = PlaybackQueue(
+            config.output_sample_rate_hz, config.prebuffer_ms, self._config.hardware.output_device
+        )
         prompt_name = uuid.uuid4().hex
         content_name = uuid.uuid4().hex
         started = time.monotonic()

@@ -29,6 +29,7 @@ class PlaybackQueue:
         self,
         sample_rate_hz: int = 24_000,
         prebuffer_ms: int = 150,
+        device: str | int | None = None,
     ) -> None:
         self._sample_rate_hz = sample_rate_hz
         self._prebuffer_bytes = sample_rate_hz * 2 * prebuffer_ms // 1000
@@ -38,12 +39,14 @@ class PlaybackQueue:
         self._playing = False
         self._condition = threading.Condition()
         self._stream: sd.OutputStream | None = None
+        self._device = device
 
     def start(self) -> None:
         self._stream = sd.OutputStream(
             samplerate=self._sample_rate_hz,
             channels=1,
             dtype="int16",
+            device=self._device,
             callback=_playback_callback(self),
         )
         self._stream.start()

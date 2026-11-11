@@ -154,9 +154,11 @@ journalctl --user -u emike -f
 | `open_timeout_seconds` / `turn_timeout_seconds` | Watchdogs (turn cap stays under Bedrock's 8-minute connection limit) |
 
 Other keys: `system_prompt` (sent verbatim at session start, prepended with
-the current local timestamp), `hardware.button_gpio` / `hardware.led_gpio`,
-`enabled_tools` (`weather`, `search`, `time`), `default_location`, and search
-keys (see below).
+the current local timestamp), `hardware.button_gpio` / `hardware.led_gpio` /
+`hardware.input_device` / `hardware.output_device` (sounddevice device name
+or index; empty = OS default — check the `mic_opened`/`speaker_opened` log
+lines to see which devices are actually used), `enabled_tools` (`weather`,
+`search`, `time`), `default_location`, and search keys (see below).
 
 ## Tools
 
