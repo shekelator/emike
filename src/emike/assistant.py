@@ -177,6 +177,41 @@ class AssistantRuntime:
                         },
                     )
 
+    async def _open_with_deadline(
+        self, model_id: str, prompt_name: str, content_name: str
+    ) -> SonicTurnSession:
+        """Open the session under the open timeout, abandoning a wedged open.
+
+        ``asyncio.wait_for`` waits for the cancellation *it requests* to take
+        effect; the SDK's duplex futures sometimes refuse it (an open stalled
+        in the CRT transport can never be cancelled), which would wedge the
+        whole turn. Racing the open against a plain deadline lets the turn
+        fail on time, and ``_abandon_open`` closes the stream if it resolves
+        later instead of leaking it toward Bedrock's session quota.
+        """
+        timeout = self._config.sonic.open_timeout_seconds
+        open_task = asyncio.ensure_future(
+            self._open_and_handshake(model_id, prompt_name, content_name)
+        )
+        done, _pending = await asyncio.wait({open_task}, timeout=timeout)
+        if not done:
+            open_task.cancel()  # best effort; may not take effect
+            open_task.add_done_callback(self._abandon_open)
+            raise TimeoutError(f"Nova Sonic open exceeded {timeout}s")
+        return open_task.result()
+
+    def _abandon_open(self, task: asyncio.Task[SonicTurnSession]) -> None:
+        """Best-effort teardown of an open that resolved after its deadline."""
+        try:
+            if task.cancelled():
+                return
+            if task.exception() is not None:
+                return
+            session = task.result()
+            asyncio.create_task(session.close())
+        except Exception:
+            LOGGER.debug("Error cleaning up abandoned Nova Sonic open", exc_info=True)
+
     async def _run_turn_once(self, request_id: str, model_id: str) -> None:
         """One full turn on one session; raise instead of swallowing errors."""
         config = self._config.sonic
@@ -199,9 +234,8 @@ class AssistantRuntime:
         session: SonicTurnSession | None = None
         saw_output: list[bool] = []
         try:
-            session = await asyncio.wait_for(
-                self._open_and_handshake(model_id, prompt_name, content_name),
-                timeout=config.open_timeout_seconds,
+            session = await self._open_with_deadline(
+                model_id, prompt_name, content_name
             )
             LOGGER.info(
                 "Nova Sonic session opened",
@@ -286,11 +320,8 @@ class AssistantRuntime:
         started = time.monotonic()
         session: SonicTurnSession | None = None
         try:
-            session = await asyncio.wait_for(
-                self._open_and_handshake(
-                    config.model_id, prompt_name, content_name
-                ),
-                timeout=config.open_timeout_seconds,
+            session = await self._open_with_deadline(
+                config.model_id, prompt_name, content_name
             )
             LOGGER.info(
                 "Nova Sonic session opened",
