@@ -88,10 +88,16 @@ class AssistantRuntime:
         config: AppConfig,
         button: ButtonInterface,
         led: LEDController,
+        conversation: bool = False,
     ) -> None:
+        """``conversation=True``: the first press opens one Nova Sonic session
+        and the model's endpointing decides turn boundaries itself; the next
+        press ends the whole conversation. Push-to-talk (default) ends the
+        user turn on release, one session per press."""
         self._config = config
         self._button = button
         self._led = led
+        self._conversation = conversation
         self._client = SonicClient(config.sonic)
         self._tools = ToolRouter(config)
         self._releases = ReleaseCounter(button)
@@ -110,18 +116,22 @@ class AssistantRuntime:
             request_id = uuid.uuid4().hex[:10]
             active, self._active = self._active, None
             if active is not None:
-                # A press during playback or processing is barge-in: the same
-                # press ends the old turn immediately and starts the new one.
-                LOGGER.debug(
-                    "Interrupting active turn",
+                # In conversation mode a press ends the conversation; in
+                # push-to-talk it is barge-in (ends the old turn, starts anew).
+                LOGGER.info(
+                    "Press while active — ending earlier session",
                     extra={"event": "turn_interrupt", "request_id": request_id},
                 )
                 active.cancel()
                 await asyncio.gather(active, return_exceptions=True)
-            self._active = asyncio.create_task(self._run_turn(request_id))
+            turn = (
+                self._run_conversation(request_id)
+                if self._conversation
+                else self._run_turn(request_id)
+            )
+            self._active = asyncio.create_task(turn)
 
     async def _run_turn(self, request_id: str) -> None:
-        sonic = self._config.sonic
         self._led.set_state(LEDState.LISTENING)
         LOGGER.info(
             "Turn started — listening",
@@ -241,6 +251,121 @@ class AssistantRuntime:
             playback.stop()
             if session is not None:
                 await self._close_session(session, prompt_name)
+
+    async def _run_conversation(self, request_id: str) -> None:
+        """One press opens a conversation; the next press ends it.
+
+        The mic streams continuously into one session while the model's
+        endpointing decides when each utterance ends, and it answers between
+        user turns. Barge-in works the way the protocol intends: keep talking
+        and the service emits INTERRUPTED, which clears playback here.
+        """
+        config = self._config.sonic
+        self._led.set_state(LEDState.LISTENING)
+        LOGGER.info(
+            "Conversation started — speak when ready; pressing again ends it",
+            extra={"event": "conversation_started", "request_id": request_id},
+        )
+        mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
+        mic = MicStreamer(
+            asyncio.get_running_loop(),
+            mic_queue,
+            config.input_sample_rate_hz,
+            config.chunk_ms,
+        )
+        playback = PlaybackQueue(config.output_sample_rate_hz, config.prebuffer_ms)
+        prompt_name = uuid.uuid4().hex
+        content_name = uuid.uuid4().hex
+        started = time.monotonic()
+        session: SonicTurnSession | None = None
+        try:
+            session = await asyncio.wait_for(
+                self._open_and_handshake(
+                    config.model_id, prompt_name, content_name
+                ),
+                timeout=config.open_timeout_seconds,
+            )
+            LOGGER.info(
+                "Nova Sonic session opened",
+                extra={"event": "session_opened", "request_id": request_id, "model": config.model_id},
+            )
+            mic.start()
+            playback.start()
+            sender = asyncio.ensure_future(
+                self._stream_mic_continuously(
+                    session, mic_queue, prompt_name, content_name
+                )
+            )
+            try:
+                # Bedrock caps the connection at 8 minutes; keep the
+                # conversation under that with a graceful close.
+                await asyncio.wait_for(
+                    self._receive(
+                        session, playback, request_id, prompt_name, conversation=True
+                    ),
+                    timeout=config.turn_timeout_seconds,
+                )
+            except TimeoutError:
+                LOGGER.info(
+                    "Conversation reached its maximum duration; closing",
+                    extra={
+                        "event": "conversation_limit",
+                        "request_id": request_id,
+                        "duration_seconds": round(time.monotonic() - started, 2),
+                    },
+                )
+            finally:
+                sender.cancel()
+            LOGGER.info(
+                "Conversation ended",
+                extra={
+                    "event": "conversation_ended",
+                    "request_id": request_id,
+                    "duration_seconds": round(time.monotonic() - started, 2),
+                },
+            )
+        except asyncio.CancelledError:
+            LOGGER.info(
+                "Conversation ended by press",
+                extra={
+                    "event": "conversation_ended",
+                    "request_id": request_id,
+                    "duration_seconds": round(time.monotonic() - started, 2),
+                },
+            )
+            raise
+        finally:
+            mic.stop()
+            playback.stop()
+            if session is not None:
+                await self._close_conversation(session, prompt_name, content_name)
+
+    async def _stream_mic_continuously(
+        self,
+        session: SonicTurnSession,
+        mic_queue: asyncio.Queue[bytes],
+        prompt_name: str,
+        content_name: str,
+    ) -> None:
+        """Stream mic audio for the whole conversation; no contentEnd until close."""
+        while True:
+            try:
+                chunk = await asyncio.wait_for(mic_queue.get(), timeout=0.05)
+            except TimeoutError:
+                continue
+            await session.send_event(
+                build_audio_input(prompt_name, content_name, encode_pcm_chunk(chunk))
+            )
+
+    async def _close_conversation(
+        self, session: SonicTurnSession, prompt_name: str, content_name: str
+    ) -> None:
+        """End the open user audio content, then run the normal close sequence."""
+        try:
+            await session.send_event(build_audio_content_end(prompt_name, content_name))
+        except Exception:
+            LOGGER.debug("Error ending audio content on close", exc_info=True)
+        await self._close_session(session, prompt_name)
 
     async def _open_and_handshake(
         self, model_id: str, prompt_name: str, content_name: str
@@ -376,8 +501,14 @@ class AssistantRuntime:
         request_id: str,
         prompt_name: str,
         saw_output: list[bool] | None = None,
+        conversation: bool = False,
     ) -> None:
-        """Drive the loop until one model completion finishes."""
+        """Drive the loop until one model completion finishes.
+
+        In conversation mode the stream spans many responses: END_TURN closes
+        the model's current response (LED back to listening) and the loop keeps
+        reading for the next user utterance.
+        """
         async for event in session.output_events():
             if saw_output is not None and not saw_output:
                 saw_output.append(True)
@@ -401,9 +532,13 @@ class AssistantRuntime:
                 if stop_reason == "INTERRUPTED":
                     playback.clear()
                 elif stop_reason == "END_TURN":
-                    # The service's completion ends with the AUDIO contentEnd
-                    # (stopReason END_TURN); completionEnd events are not
-                    # reliably sent, so this closes the receive loop.
+                    if conversation:
+                        # The service's completion ends with the AUDIO
+                        # contentEnd (stopReason END_TURN); completionEnd is
+                        # not reliably sent. In conversation mode the same
+                        # stream continues with the next user utterance.
+                        self._led.set_state(LEDState.LISTENING)
+                        continue
                     return
             elif kind == "completion_end":
                 return

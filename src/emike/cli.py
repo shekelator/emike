@@ -27,6 +27,12 @@ def main() -> None:
         help="Use keyboard simulation instead of GPIO",
     )
     parser.add_argument(
+        "--push-to-talk",
+        action="store_true",
+        help="Keyboard fallback: end the user turn on each Enter instead of "
+        "running one continuous conversation (matches GPIO behavior)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Force DEBUG-level logging (overrides debug_mode in the config)",
@@ -44,7 +50,14 @@ def main() -> None:
         KeyboardButton() if args.keyboard else KeyboardOrGPIOButton(config.hardware.button_gpio)
     )
     led = create_led(config.hardware.led_gpio)
-    runtime = AssistantRuntime(config=config, button=button, led=led)
+    runtime = AssistantRuntime(
+        config=config,
+        button=button,
+        led=led,
+        # Keyboard development runs one continuous conversation (Enter starts,
+        # Enter again ends); GPIO stays push-to-talk per the hardware design.
+        conversation=args.keyboard and not args.push_to_talk,
+    )
     try:
         runtime.run_forever()
     except KeyboardInterrupt:

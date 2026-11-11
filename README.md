@@ -102,8 +102,13 @@ cp .env.example .env && nano .env   # add AWS credentials
 emike --keyboard --config config/assistant.yaml
 ```
 
-Keyboard mode: press Enter to start capture, Enter again to release. GPIO is
-not needed for development. Do not call the bare system `pip3` — inside the
+Keyboard mode runs a **conversation**: the first Enter opens one Nova Sonic
+session and starts continuous capture; the model's own endpointing detects
+when you finish each sentence, so you get answers with no keypresses between
+them (talk over an answer to barge in — the service detects the overlap).
+The next Enter ends the conversation. GPIO on the Pi is push-to-talk
+(button held = listening); `--push-to-talk` restores that behavior for
+keyboard testing too. Do not call the bare system `pip3` — inside the
 activated venv, `python`/`pip` resolve to 3.12.
 
 **macOS:** your terminal needs microphone permission (System Settings →
