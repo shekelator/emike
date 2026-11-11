@@ -30,7 +30,7 @@ from emike.button import ButtonInterface
 from emike.config import AppConfig
 from emike.led import LEDController, LEDState
 from emike.playback import PlaybackQueue
-from emike.sonic_client import SonicClient
+from emike.sonic_client import SonicClient, exc_message
 from emike.sonic_events import (
     build_audio_content_end,
     build_audio_content_start,
@@ -38,7 +38,6 @@ from emike.sonic_events import (
     build_prompt_end,
     build_prompt_start,
     build_session_end,
-    build_session_start,
     build_system_prompt_events,
     build_tool_result_events,
     classify_output_event,
@@ -122,12 +121,55 @@ class AssistantRuntime:
             self._active = asyncio.create_task(self._run_turn(request_id))
 
     async def _run_turn(self, request_id: str) -> None:
-        config = self._config.sonic
+        sonic = self._config.sonic
         self._led.set_state(LEDState.LISTENING)
         LOGGER.info(
             "Turn started — listening",
             extra={"event": "turn_started", "request_id": request_id},
         )
+        sonic = self._config.sonic
+        attempts = [sonic.model_id]
+        if sonic.fallback_model_id and sonic.fallback_model_id != sonic.model_id:
+            attempts.append(sonic.fallback_model_id)
+        for attempt_index, model_id in enumerate(attempts):
+            try:
+                await self._run_turn_once(request_id, model_id)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a turn error must not kill the service
+                if attempt_index == len(attempts) - 1:
+                    LOGGER.error(
+                        "Turn failed",
+                        extra={
+                            "event": "turn_error",
+                            "request_id": request_id,
+                            "model": model_id,
+                            "error": exc_message(exc),
+                        },
+                    )
+                    self._led.set_state(LEDState.ERROR)
+                else:
+                    # 403 AccessDenied (model access not enabled) and similar
+                    # service refusals surface with no model output at all;
+                    # a whole fresh turn (session, prompt, mic) then runs on
+                    # the fallback model.
+                    LOGGER.warning(
+                        "Model %s failed (%s); retrying turn with %s",
+                        model_id,
+                        exc_message(exc),
+                        attempts[-1],
+                        extra={
+                            "event": "sonic_model_fallback",
+                            "primary_model": model_id,
+                            "fallback_model": attempts[-1],
+                            "error": exc_message(exc),
+                        },
+                    )
+
+    async def _run_turn_once(self, request_id: str, model_id: str) -> None:
+        """One full turn on one session; raise instead of swallowing errors."""
+        config = self._config.sonic
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
         mic = MicStreamer(
             asyncio.get_running_loop(),
@@ -141,40 +183,15 @@ class AssistantRuntime:
         baseline = self._releases.count()
         started = time.monotonic()
         session: SonicTurnSession | None = None
+        saw_output: list[bool] = []
         try:
-            opened = await asyncio.wait_for(
-                self._open_session(), timeout=config.open_timeout_seconds
+            session = await asyncio.wait_for(
+                self._open_and_handshake(model_id, prompt_name, content_name),
+                timeout=config.open_timeout_seconds,
             )
-            session, model_id = opened
             LOGGER.info(
                 "Nova Sonic session opened",
-                extra={
-                    "event": "session_opened",
-                    "request_id": request_id,
-                    "model": model_id,
-                },
-            )
-            await session.send_events(
-                [
-                    build_session_start(
-                        config.max_tokens,
-                        config.top_p,
-                        config.temperature,
-                        config.endpointing_sensitivity,
-                    ),
-                    build_prompt_start(
-                        prompt_name,
-                        config.voice_id,
-                        config.output_sample_rate_hz,
-                        self._tools.get_nova_tool_definitions(),
-                    ),
-                    *build_system_prompt_events(
-                        prompt_name, uuid.uuid4().hex, self._system_prompt()
-                    ),
-                    build_audio_content_start(
-                        prompt_name, content_name, config.input_sample_rate_hz
-                    ),
-                ]
+                extra={"event": "session_opened", "request_id": request_id, "model": model_id},
             )
             mic.start()
             playback.start()
@@ -191,7 +208,9 @@ class AssistantRuntime:
             )
             try:
                 await asyncio.wait_for(
-                    self._receive(session, playback, request_id, prompt_name),
+                    self._receive(
+                        session, playback, request_id, prompt_name, saw_output
+                    ),
                     timeout=config.turn_timeout_seconds,
                 )
                 await asyncio.to_thread(playback.wait_until_drained, 30.0)
@@ -206,18 +225,15 @@ class AssistantRuntime:
                 },
             )
         except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - a turn error must not kill the service
-            LOGGER.error(
-                "Turn failed",
+            LOGGER.info(
+                "Turn cancelled by new press",
                 extra={
-                    "event": "turn_error",
+                    "event": "turn_cancelled",
                     "request_id": request_id,
-                    "error": f"{type(exc).__name__}: {exc}",
                     "duration_seconds": round(time.monotonic() - started, 2),
                 },
             )
-            self._led.set_state(LEDState.ERROR)
+            raise
         finally:
             # Dropping everything here is what makes barge-in instant: the mic
             # stops feeding and any audio still queued for playback discards.
@@ -226,9 +242,52 @@ class AssistantRuntime:
             if session is not None:
                 await self._close_session(session, prompt_name)
 
-    async def _open_session(self) -> tuple[SonicTurnSession, str]:
-        duplex, model_id = await self._client.open_stream()
-        return SonicTurnSession(duplex), model_id
+    async def _open_and_handshake(
+        self, model_id: str, prompt_name: str, content_name: str
+    ) -> SonicTurnSession:
+        """Open the stream and send the turn handshake as one unit under one timeout.
+
+        Bedrock resolves model access asynchronously: a 403 refusal can arrive
+        after the duplex is handed back and then hangs any further input send.
+        Keeping the handshake inside the open timeout is what lets the
+        fallback-model retry happen on a dead session.
+        """
+        duplex: Any = None
+        session: SonicTurnSession | None = None
+        try:
+            duplex, _ = await self._client.open_stream(model_id)
+            session = SonicTurnSession(duplex)
+            await session.send_events(
+                [
+                    build_prompt_start(
+                        prompt_name,
+                        self._config.sonic.voice_id,
+                        self._config.sonic.output_sample_rate_hz,
+                        self._tools.get_nova_tool_definitions(),
+                    ),
+                    *build_system_prompt_events(
+                        prompt_name, uuid.uuid4().hex, self._system_prompt()
+                    ),
+                    build_audio_content_start(
+                        prompt_name,
+                        content_name,
+                        self._config.sonic.input_sample_rate_hz,
+                    ),
+                ]
+            )
+        except asyncio.CancelledError:
+            # The open timeout fired: the half-open stream must not leak
+            # (Bedrock allows 20 concurrent sessions per region).
+            if session is not None:
+                await session.close()
+            elif duplex is not None:
+                await SonicTurnSession(duplex).close()
+            raise
+        except Exception:
+            if session is not None:
+                await self._close_session(session, prompt_name)
+            raise
+        return session
 
     async def _close_session(self, session: SonicTurnSession, prompt_name: str) -> None:
         """Send the documented end-of-session sequence, then close the stream.
@@ -316,9 +375,12 @@ class AssistantRuntime:
         playback: PlaybackQueue,
         request_id: str,
         prompt_name: str,
+        saw_output: list[bool] | None = None,
     ) -> None:
         """Drive the loop until one model completion finishes."""
         async for event in session.output_events():
+            if saw_output is not None and not saw_output:
+                saw_output.append(True)
             kind = classify_output_event(event)
             self._log_output_event_trace(kind, event)
             if kind == "content_start":

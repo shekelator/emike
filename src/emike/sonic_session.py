@@ -32,17 +32,22 @@ class SonicSessionError(RuntimeError):
     """Raised when the stream yields a Bedrock service exception."""
 
 
+async def send_raw_event(duplex: Any, event: dict[str, Any]) -> None:
+    """Send one ``{"event": {...}}`` payload on a raw duplex stream."""
+    wire = json.dumps(event, separators=(",", ":")).encode("utf-8")
+    chunk = InvokeModelWithBidirectionalStreamInputChunk(
+        value=BidirectionalInputPayloadPart(bytes_=wire)
+    )
+    await duplex.input_stream.send(chunk)
+
+
 class SonicTurnSession:
     def __init__(self, duplex: Any) -> None:
         self._duplex = duplex
         self._output_stream: AsyncIterator[Any] | None = None
 
     async def send_event(self, event: dict[str, Any]) -> None:
-        wire = json.dumps(event, separators=(",", ":")).encode("utf-8")
-        chunk = InvokeModelWithBidirectionalStreamInputChunk(
-            value=BidirectionalInputPayloadPart(bytes_=wire)
-        )
-        await self._duplex.input_stream.send(chunk)
+        await send_raw_event(self._duplex, event)
 
     async def send_events(self, events: list[dict[str, Any]]) -> None:
         for event in events:

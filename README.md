@@ -75,6 +75,13 @@ locally.
    (what `.env` sets on the Pi — loaded by the systemd unit), then the usual
    `~/.aws` profile files (handy on a dev machine).
 
+**Every turn fails with `AccessDeniedException` (empty message)?** That is
+Bedrock model access, not IAM: the stream opens fine and the refusal arrives
+once the first request chunk is sent. Enable model access for the Sonic model
+IDs in the Bedrock console for your account/region (step 1 above). The log's
+`sonic_model_fallback` event shows which model was refused and which one is
+being retried; `turn_error` includes the model that finally failed.
+
 ## Quick start (developer machine)
 
 Requires Python **3.12 or newer** — the system Python of a stock machine

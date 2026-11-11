@@ -19,42 +19,53 @@ from smithy_aws_core.identity import AWSCredentialsIdentity, IdentityChain
 from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from emike.config import SonicConfig
+from emike.sonic_events import build_session_start
+from emike.sonic_session import send_raw_event
 
 LOGGER = logging.getLogger(__name__)
 
 
+def exc_message(exc: Exception) -> str:
+    """Human message for a (smithy/Bedrock) exception — str() is often empty."""
+    text = str(exc) or str(getattr(exc, "message", "") or "")
+    return text or type(exc).__name__
+
+
 class SonicClient:
-    """Opens Nova Sonic bidirectional streams, with configured model fallback."""
+    """Opens Nova Sonic bidirectional streams (one model per call)."""
 
     def __init__(self, cfg: SonicConfig) -> None:
         self._cfg = cfg
 
-    async def open_stream(self) -> tuple[Any, str]:
+    async def open_stream(self, model_id: str | None = None) -> tuple[Any, str]:
         """Open a bidirectional stream. Returns ``(duplex_stream, model_id)``.
 
-        Tries the configured primary model first; on any failure retries once
-        with the configured fallback model.
+        The ``sessionStart`` event is sent inside this call: Bedrock resolves
+        model access on the first input chunk, so a subscription-disabled model
+        must fail here rather than mid-turn (the runtime's fallback retry).
         """
-        try:
-            return await self._open(self._cfg.model_id), self._cfg.model_id
-        except Exception as primary_error:
-            fallback = self._cfg.fallback_model_id
-            if not fallback or fallback == self._cfg.model_id:
-                raise
-            LOGGER.warning(
-                "Primary model %s failed (%s: %s); falling back to %s",
-                self._cfg.model_id,
-                type(primary_error).__name__,
-                primary_error,
-                fallback,
-                extra={
-                    "event": "sonic_model_fallback",
-                    "primary_model": self._cfg.model_id,
-                    "fallback_model": fallback,
-                    "error": str(primary_error),
-                },
-            )
-            return await self._open(fallback), fallback
+        model_id = model_id or self._cfg.model_id
+        duplex = await self._open(model_id)
+        await self._send_session_start(duplex)
+        return duplex, model_id
+
+    async def _send_session_start(self, duplex: Any) -> None:
+        """Send sessionStart before handing the stream over.
+
+        Bedrock validates model access on the first input chunk, not at open —
+        a 403 AccessDeniedException only surfaces there. Sending it here puts
+        that failure inside the model-fallback retry path, where a
+        subscription-disabled primary model can still give way to the fallback.
+        """
+        await send_raw_event(
+            duplex,
+            build_session_start(
+                self._cfg.max_tokens,
+                self._cfg.top_p,
+                self._cfg.temperature,
+                self._cfg.endpointing_sensitivity,
+            ),
+        )
 
     async def _open(self, model_id: str) -> Any:
         # Standard identity chain: AWS_* env vars first (what .env sets on the
