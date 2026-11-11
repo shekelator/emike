@@ -19,6 +19,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -29,6 +30,13 @@ from emike.audio import MicStreamer
 from emike.button import ButtonInterface
 from emike.config import AppConfig
 from emike.led import LEDController, LEDState
+from emike.messaging import (
+    DEFAULT_OFFSET_PATH,
+    IncomingMessage,
+    MessageTransport,
+    TelegramPoller,
+    TelegramTransport,
+)
 from emike.playback import PlaybackQueue
 from emike.sonic_client import SonicClient, exc_message
 from emike.sonic_events import (
@@ -100,7 +108,13 @@ class AssistantRuntime:
         self._led = led
         self._conversation = conversation
         self._client = SonicClient(config.sonic)
-        self._tools = ToolRouter(config, on_timer_elapsed=self._on_timer_elapsed)
+        self._inbox: list[IncomingMessage] = []
+        self._telegram_transport: MessageTransport | None = None
+        self._poller: TelegramPoller | None = None
+        self._init_messaging()
+        self._tools = ToolRouter(
+            config, on_timer_elapsed=self._on_timer_elapsed, transport=self._telegram_transport
+        )
         self._releases = ReleaseCounter(button)
         self._active: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -108,12 +122,98 @@ class AssistantRuntime:
 
     def run_forever(self) -> None:
         """Blocking entry point used by the CLI."""
-        asyncio.run(self._run())
+        try:
+            asyncio.run(self._run())
+        finally:
+            poller = self._poller
+            if poller is not None:
+                # Bounded best-effort: a long-poll holding the socket may not
+                # release within the join; the thread is daemon either way.
+                poller.stop(join_timeout=5.0)
+
+    def _init_messaging(self) -> None:
+        """Phase 1 scaffolding: poll allowlisted chats into a bounded inbox.
+
+        The consumer (wake-and-announce) arrives in a later phase; messages
+        accumulate here, capped at ``max_announcements``. When messaging is
+        disabled or no bot token is present nothing starts and the inbox
+        simply stays empty.
+        """
+        messaging = self._config.messaging
+        if not messaging.enabled:
+            return
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        if not token.strip():
+            LOGGER.warning(
+                "Messaging enabled but TELEGRAM_BOT_TOKEN is not set — starting without it",
+                extra={"event": "messaging_disabled", "reason": "missing_token"},
+            )
+            return
+        transport = TelegramTransport(
+            token, poll_timeout_seconds=messaging.poll_timeout_seconds
+        )
+        self._telegram_transport = transport
+        self._poller = TelegramPoller(
+            transport,
+            on_message=self._on_telegram_message,
+            allowlist=(str(chat_id) for chat_id in messaging.chat_allowlist),
+            offset_path=DEFAULT_OFFSET_PATH,
+        )
+        LOGGER.info(
+            "Messaging poller wired",
+            extra={
+                "event": "messaging_started",
+                "allowlist_count": len(messaging.chat_allowlist),
+            },
+        )
+
+    def _on_telegram_message(self, message: IncomingMessage) -> None:
+        """Loop-side landing for one allowlisted phone message.
+
+        Runs on the event loop thread only (the poller hands messages over
+        with call_soon_threadsafe), so the inbox needs no lock. Message text
+        is never logged.
+        """
+        cap = self._config.messaging.max_announcements
+        if len(self._inbox) >= cap:
+            dropped = self._inbox.pop(0)
+            LOGGER.info(
+                "Inbox full — dropping the oldest pending message",
+                extra={
+                    "event": "inbox_full",
+                    "dropped_update_id": dropped.update_id,
+                    "chat_id": dropped.chat_id,
+                },
+            )
+        self._inbox.append(message)
+        LOGGER.info(
+            "Phone message received",
+            extra={
+                "event": "message_received",
+                "chat_id": message.chat_id,
+                "chars": len(message.text),
+                "update_id": message.update_id,
+                "pending": len(self._inbox),
+            },
+        )
+
+    def drain_inbox(self) -> list[IncomingMessage]:
+        """Take all pending phone messages (event loop thread only).
+
+        This is the seam a later announcement phase consumes; today nothing
+        calls it and the inbox just accumulates up to its cap.
+        """
+        messages = self._inbox
+        self._inbox = []
+        return messages
 
     async def _run(self) -> None:
         self._loop = asyncio.get_running_loop()
         LOGGER.info("Assistant ready", extra={"event": "assistant_ready"})
         self._releases.start()
+        poller = self._poller
+        if poller is not None:
+            poller.start(self._loop)
         while True:
             self._led.set_state(LEDState.IDLE)
             await asyncio.to_thread(self._button.wait_for_press)

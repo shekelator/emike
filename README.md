@@ -162,8 +162,9 @@ the current local timestamp), `hardware.button_gpio` / `hardware.led_gpio` /
 `hardware.input_device` / `hardware.output_device` (sounddevice device name
 or index; empty = OS default — check the `mic_opened`/`speaker_opened` log
 lines to see which devices are actually used), `enabled_tools` (`weather`,
-`search`, `time`, `timers`), `default_location`, `timer_alarm_seconds`
-(how long the timer alarm sounds, default 6), and search keys (see below).
+`search`, `time`, `timers`, `messaging`), `default_location`,
+`timer_alarm_seconds` (how long the timer alarm sounds, default 6), and search
+keys (see below).
 
 ## Tools
 
@@ -179,10 +180,63 @@ lines to see which devices are actually used), `enabled_tools` (`weather`,
   which sounds even while the assistant is idle and runs over an active
   conversation; `timer_alarm_seconds` sets how long it sounds. A timer that
   fires while another alarm is already sounding does not queue a second one.
+- Messaging (`send_message`) — sends a dictated text to a configured phone via
+  Telegram Bot API; see "Messaging (Telegram)" below for setup.
 
 Adding a tool = one entry in `ToolRouter.get_tool_definitions()` + one branch
 in `execute_tool_call` (and expose it in `enabled_tools`); the schema converts
 to Nova Sonic's `toolSpec` format automatically.
+
+## Messaging (Telegram)
+
+Dictate a short message at the box ("send Mort saying pizza at six") and the
+assistant reads it back exactly, waits for a confirm, and delivers it to an
+allowlisted phone through a Telegram bot. **Phase 1 is outbound only**: replies
+from the phone are received by the running appliance but not yet announced —
+wake-and-announce (chime + read-aloud) lands in a follow-up phase.
+
+### Setup (one time)
+
+1. In Telegram, message `@BotFather`, run `/newbot`, and copy the HTTP token.
+2. Put the token in `.env` as `TELEGRAM_BOT_TOKEN` (see `.env.example`; .env is
+   gitignored and loaded by the systemd unit).
+3. From your phone, open Telegram, find your bot, and send it any message once.
+4. Inside the activated venv run `python scripts/telegram/print-chat-ids.py`
+   and copy the printed `chat_id`.
+5. In `config/assistant.yaml`: add that id to `messaging.chat_allowlist`, set
+   `messaging.recipients.mort` to the same id, and add `messaging` to
+   `enabled_tools`.
+6. Restart emike.
+
+### Configuration (`messaging:` section)
+
+| Key | Meaning |
+| --- | --- |
+| `enabled` | Master switch when the poller starts (default `false`) |
+| `poll_timeout_seconds` | Long-poll hold per `getUpdates` call (default 25) |
+| `chat_allowlist` | Chat ids allowed to talk to the box (inbound; drop everything else) |
+| `recipients` | Name → chat id the `send_message` tool may send to (e.g. `mort: "123…9"`) |
+| `send_rate_per_minute` / `send_window_seconds` | Rolling-window send bucket (default 5 messages per 600 s). An empty bucket returns "Send limit reached. Try again in a few minutes." instead of failing the turn |
+| `max_announcements` | Inbox cap (parsed now, used by the announcement phase) |
+| `announce_chime` | Play a soft ding before announcements (parsed now, used by the announcement phase) |
+
+### Behavior and privacy notes
+
+- **Read back + confirm**: the assistant repeats the dictated message verbatim
+  and only calls `send_message` after an explicit yes; the rate bucket is the
+  backstop.
+- Message text passes Telegram's cloud in plaintext (bot chats get no
+  end-to-end encryption — acceptable for household note-passing).
+- The bot token (`TELEGRAM_BOT_TOKEN`) never appears in logs or exception
+  messages; the transport redacts it.
+- Message text itself is never logged (journalctl is shared; messages are meant
+  to be read aloud, not read from a terminal).
+
+### Log events this feature adds
+
+`messaging_started`, `messaging_disabled` (no token), `message_received` (chat
+id + length + update id), `message_rejected` (non-allowlisted chat), 
+`transport_error` (with backoff), `inbox_full`, `offset_persist_error`.
 
 ## LED states
 

@@ -13,12 +13,39 @@ from typing import Any, cast
 import requests
 
 from emike.config import AppConfig
+from emike.messaging import MAX_MESSAGE_CHARS, MessageTransport, TokenBucket
 
 _DURATION_PATTERN = re.compile(r"(\d+)\s*(seconds?|minutes?|hours?)", re.IGNORECASE)
 
 
 def _noop_on_timer_elapsed(_timer: ActiveTimer) -> None:
     """Default no-op; timers are silent unless a runtime wires a callback."""
+
+
+_SEND_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "send_message",
+        "description": (
+            "Send a short text message from Mike to someone's phone. "
+            "Use only when the user at the box clearly asks to send a message to a person."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recipient": {
+                    "type": "string",
+                    "description": "Who to send to, e.g. 'mort'. Use exactly these names from the config.",
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message text to send, in the sender's own words.",
+                },
+            },
+            "required": ["recipient", "message"],
+        },
+    },
+}
 
 
 @dataclass(slots=True)
@@ -387,6 +414,7 @@ class ToolRouter:
         self,
         config: AppConfig,
         on_timer_elapsed: Callable[[ActiveTimer], None] | None = None,
+        transport: MessageTransport | None = None,
     ) -> None:
         self._enabled = {name.lower() for name in config.enabled_tools}
         self._default_location = config.default_location
@@ -398,6 +426,21 @@ class ToolRouter:
             firecrawl_api_key_env=config.firecrawl_api_key_env,
             firecrawl_search_url=config.firecrawl_search_url,
             timeout_seconds=config.search_timeout_seconds,
+        )
+        self._messaging_enabled = "messaging" in self._enabled
+        # Recipients resolve to chat ids the transport can send to; names are
+        # what the model uses. The bucket is a backstop against a model
+        # repeating a send after hallucinated confirmations.
+        self._send_recipients = {
+            str(name): str(chat_id) for name, chat_id in config.messaging.recipients.items()
+        }
+        self._send_transport = transport
+        self._send_bucket = (
+            TokenBucket(
+                config.messaging.send_rate_per_minute, config.messaging.send_window_seconds
+            )
+            if self._messaging_enabled
+            else None
         )
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:
@@ -548,6 +591,9 @@ class ToolRouter:
                 ]
             )
 
+        if self._messaging_enabled and self._send_transport is not None:
+            tools.append(_SEND_SCHEMA)
+
         return tools
 
     def get_nova_tool_definitions(self) -> list[dict[str, Any]]:
@@ -610,7 +656,37 @@ class ToolRouter:
                 return f"Cancelled timer {timer_id}."
             return f"I could not find timer {timer_id}."
 
+        if tool_name == "send_message":
+            return self._send_message(args)
+
         return f"Unknown tool '{tool_name}'."
+
+    def _send_message(self, args: dict[str, Any]) -> str:
+        """Send to a configured recipient; everything conversational stays a string.
+
+        Transport failures propagate as TransportError (already token-redacted)
+        and take the existing tool_error → tool-result path.
+        """
+        recipient = str(args.get("recipient", "")).strip().lower()
+        message = str(args.get("message", "")).strip()
+        if not recipient:
+            return "Missing recipient for send_message."
+        if not message:
+            return "Missing message text to send."
+        if not self._messaging_enabled or self._send_bucket is None:
+            return "Messaging is not available right now."
+        chat_id = self._send_recipients.get(recipient)
+        if chat_id is None:
+            names = ", ".join(sorted(self._send_recipients)) if self._send_recipients else ""
+            suffix = f" {names}" if names else " none"
+            return f"Unknown recipient. Known people:{suffix}."
+        transport = self._send_transport
+        if transport is None:
+            return "Messaging is not available right now."
+        if not self._send_bucket.try_acquire():
+            return "Send limit reached. Try again in a few minutes."
+        transport.send(chat_id, message[:MAX_MESSAGE_CHARS])
+        return f"Message sent to {recipient.capitalize()}'s phone."
 
 
 def _parse_duration_seconds(text: str) -> int | None:

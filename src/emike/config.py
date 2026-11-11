@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -45,6 +45,25 @@ class SonicConfig:
 
 
 @dataclass(slots=True)
+class MessagingConfig:
+    """Telegram messaging (phase 1: outbound tool + inbound poller scaffold).
+
+    ``max_announcements`` and ``announce_chime`` are parsed now but only used
+    by later phases (announcement batching / chime); they round-trip through
+    the config so the YAML surface is stable.
+    """
+
+    enabled: bool = False
+    poll_timeout_seconds: int = 25
+    chat_allowlist: list[int] = field(default_factory=list)
+    recipients: dict[str, str] = field(default_factory=dict)
+    send_rate_per_minute: int = 5
+    send_window_seconds: int = 600
+    max_announcements: int = 10
+    announce_chime: bool = True
+
+
+@dataclass(slots=True)
 class HardwareConfig:
     button_gpio: int = 17
     led_gpio: int | None = 27
@@ -67,6 +86,7 @@ class AppConfig:
     weather_timeout_seconds: int = 10
     timer_alarm_seconds: int = 6
     debug_mode: bool = False
+    messaging: MessagingConfig = field(default_factory=MessagingConfig)
 
 
 DEFAULT_CONFIG_PATH = Path("config/assistant.yaml")
@@ -90,6 +110,42 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     hw_raw = raw.get("hardware", {})
     if not isinstance(hw_raw, dict):
         raise TypeError("hardware must be a mapping")
+
+    messaging_raw = raw.get("messaging", {})
+    if not isinstance(messaging_raw, dict):
+        raise TypeError("messaging must be a mapping")
+
+    allowlist_raw = messaging_raw.get("chat_allowlist") or []
+    if not isinstance(allowlist_raw, list):
+        raise TypeError("messaging.chat_allowlist must be a list")
+    allowlist = [int(chat_id) for chat_id in allowlist_raw]
+
+    recipients_raw = messaging_raw.get("recipients") or {}
+    if not isinstance(recipients_raw, dict):
+        raise TypeError("messaging.recipients must be a mapping")
+    recipients = {str(name): str(chat_id) for name, chat_id in recipients_raw.items()}
+
+    poll_timeout_seconds = int(messaging_raw.get("poll_timeout_seconds", 25))
+    if not 1 <= poll_timeout_seconds <= 50:
+        raise ValueError(
+            f"messaging.poll_timeout_seconds must be between 1 and 50 (Telegram cap); "
+            f"got {poll_timeout_seconds}"
+        )
+    send_rate_per_minute = int(messaging_raw.get("send_rate_per_minute", 5))
+    if send_rate_per_minute < 1:
+        raise ValueError(
+            f"messaging.send_rate_per_minute must be at least 1; got {send_rate_per_minute}"
+        )
+    send_window_seconds = int(messaging_raw.get("send_window_seconds", 600))
+    if send_window_seconds < 1:
+        raise ValueError(
+            f"messaging.send_window_seconds must be at least 1; got {send_window_seconds}"
+        )
+    max_announcements = int(messaging_raw.get("max_announcements", 10))
+    if max_announcements < 1:
+        raise ValueError(
+            f"messaging.max_announcements must be at least 1; got {max_announcements}"
+        )
 
     enabled_tools_raw = raw.get("enabled_tools", ["weather", "search", "time"])
     if not isinstance(enabled_tools_raw, list):
@@ -143,4 +199,14 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         weather_timeout_seconds=int(raw.get("weather_timeout_seconds", 10)),
         timer_alarm_seconds=timer_alarm_seconds,
         debug_mode=bool(raw.get("debug_mode", False)),
+        messaging=MessagingConfig(
+            enabled=bool(messaging_raw.get("enabled", False)),
+            poll_timeout_seconds=poll_timeout_seconds,
+            chat_allowlist=allowlist,
+            recipients=recipients,
+            send_rate_per_minute=send_rate_per_minute,
+            send_window_seconds=send_window_seconds,
+            max_announcements=max_announcements,
+            announce_chime=bool(messaging_raw.get("announce_chime", True)),
+        ),
     )

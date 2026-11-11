@@ -3,6 +3,10 @@ system_prompt: |
   Reply in one to three short spoken sentences.
   Do not use markdown, lists, emoji, or special symbols.
   If you do not know something, say so directly.
+  When someone at the box asks to send a message to a person's phone, repeat the
+  message back exactly and get them to confirm before calling send_message. Only
+  send a message after that confirmation. When reading an announcement, read the
+  message verbatim and add nothing else about the phone conversation.
 
 sonic:
   aws_region: us-east-1
@@ -33,6 +37,22 @@ enabled_tools:
   - weather
   - search
   - time
+# Add `messaging` (after wiring chat ids below) to register the send_message tool:
+#  - messaging
+
+# Telegram messaging — see README "Messaging (Telegram)" for setup.
+messaging:
+  enabled: false
+  # Real chat ids come from scripts/telegram/print-chat-ids.py after your bot
+  # receives a message from your phone.
+  chat_allowlist: []
+  recipients:
+    # mort: "123456789"
+  send_rate_per_minute: 5
+  send_window_seconds: 600
+  # Parsed but unused until the announcement phase.
+  max_announcements: 10
+  announce_chime: true
 
 default_location: Jamaica Plain, MA 02130
 search_provider: auto
