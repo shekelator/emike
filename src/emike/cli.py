@@ -61,7 +61,9 @@ def main() -> None:
     try:
         runtime.run_forever()
     except KeyboardInterrupt:
-        pass
+        # asyncio.run spends up to 300s joining the executor thread parked in
+        # the button wait; an appliance console exit should be immediate.
+        os._exit(0)
     finally:
         button.close()
         led.close()

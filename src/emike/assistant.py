@@ -225,7 +225,7 @@ class AssistantRuntime:
                 )
                 await asyncio.to_thread(playback.wait_until_drained, 30.0)
             finally:
-                sender.cancel()
+                await self._drain_sender(sender)
             LOGGER.info(
                 "Turn completed",
                 extra={
@@ -315,7 +315,7 @@ class AssistantRuntime:
                     },
                 )
             finally:
-                sender.cancel()
+                await self._drain_sender(sender)
             LOGGER.info(
                 "Conversation ended",
                 extra={
@@ -357,12 +357,25 @@ class AssistantRuntime:
                 build_audio_input(prompt_name, content_name, encode_pcm_chunk(chunk))
             )
 
+    async def _drain_sender(self, sender: asyncio.Future[None]) -> None:
+        """Cancel the mic sender and let its in-flight send settle."""
+        sender.cancel()
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(sender, return_exceptions=True), timeout=5.0
+            )
+        except Exception:
+            LOGGER.debug("Mic sender did not settle", exc_info=True)
+
     async def _close_conversation(
         self, session: SonicTurnSession, prompt_name: str, content_name: str
     ) -> None:
         """End the open user audio content, then run the normal close sequence."""
         try:
-            await session.send_event(build_audio_content_end(prompt_name, content_name))
+            await asyncio.wait_for(
+                session.send_event(build_audio_content_end(prompt_name, content_name)),
+                timeout=5.0,
+            )
         except Exception:
             LOGGER.debug("Error ending audio content on close", exc_info=True)
         await self._close_session(session, prompt_name)
@@ -418,13 +431,16 @@ class AssistantRuntime:
         """Send the documented end-of-session sequence, then close the stream.
 
         Skipping promptEnd/sessionEnd can orphan server-side resources, so do
-        both even when the turn failed; every failure is best-effort.
+        both even when the turn failed. Every step here is best-effort and
+        timeout-guarded: sends into a dying duplex can block indefinitely (the
+        service stops consuming events once it refuses or finishes the turn),
+        which would hang the finally block forever without the guard.
         """
-        try:
-            await session.send_event(build_prompt_end(prompt_name))
-            await session.send_event(build_session_end())
-        except Exception:
-            LOGGER.debug("Error closing Nova Sonic session", exc_info=True)
+        for event in (build_prompt_end(prompt_name), build_session_end()):
+            try:
+                await asyncio.wait_for(session.send_event(event), timeout=5.0)
+            except Exception:
+                LOGGER.debug("Error closing Nova Sonic session", exc_info=True)
         await session.close()
 
     async def _stream_mic(

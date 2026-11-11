@@ -14,6 +14,7 @@ the sender/receiver task pair in ``AssistantRuntime`` does, and
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -70,8 +71,20 @@ class SonicTurnSession:
             yield json.loads(raw.decode("utf-8"))
 
     async def close(self) -> None:
-        """Close the duplex stream, suppressing shutdown errors."""
+        """Close the duplex stream, suppressing shutdown errors.
+
+        End-of-body on the input stream is what tells the service the session
+        is over. ``duplex.close()`` additionally waits for the output stream
+        to resolve, which can block forever when no output ever arrived (e.g.
+        the conversation ended before the model responded), so mirror the
+        official samples: close the input unconditionally, then attempt the
+        full close under a timeout.
+        """
         try:
-            await self._duplex.close()
+            await asyncio.wait_for(self._duplex.input_stream.close(), timeout=10)
+        except Exception:
+            LOGGER.debug("Error closing Nova Sonic input stream", exc_info=True)
+        try:
+            await asyncio.wait_for(self._duplex.close(), timeout=10)
         except Exception:
             LOGGER.debug("Error closing Nova Sonic stream", exc_info=True)
