@@ -57,6 +57,7 @@ module = [
   "sounddevice",
   "aws_sdk_bedrock_runtime.*",
   "smithy_aws_core.*",
+  "awscrt.*",
 ]
 ignore_missing_imports = true
 disallow_untyped_calls = false

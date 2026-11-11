@@ -15,6 +15,7 @@ the sender/receiver task pair in ``AssistantRuntime`` does, and
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -27,6 +28,39 @@ from aws_sdk_bedrock_runtime.models import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _patch_awscrt_cancelled_body_chunks() -> None:
+    """Stop the CRT callback exception when a chunk outlives its reader.
+
+    ``awscrt``'s ``_on_body`` runs ``future.set_result(chunk)`` on a read
+    future that barge-in already cancelled and prints a raw
+    ``InvalidStateError`` traceback from its native callback handler
+    ("Treating Python exception as error 3(AWS_ERROR_UNKNOWN)"). The close
+    sequence itself proceeds correctly — this is cosmetic noise only, so
+    wrap the one method in an InvalidStateError guard at the SDK seam.
+    """
+    try:
+        from awscrt.aio import http as awscrt_http
+
+        def on_body_tolerating_cancellations(self: Any, chunk: bytes) -> None:
+            with self._deque_lock:
+                if self._chunk_futures:
+                    future = self._chunk_futures.popleft()
+                else:
+                    self._received_chunks.append(chunk)
+                    return
+            try:
+                future.set_result(chunk)
+            except concurrent.futures.InvalidStateError:
+                pass
+
+        awscrt_http.AIOHttpClientStreamUnified._on_body = on_body_tolerating_cancellations
+    except Exception:
+        LOGGER.debug("Could not patch awscrt _on_body; shutdown trace may appear", exc_info=True)
+
+
+_patch_awscrt_cancelled_body_chunks()
 
 
 class SonicSessionError(RuntimeError):
