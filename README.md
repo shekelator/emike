@@ -77,18 +77,22 @@ locally.
 
 ## Quick start (developer machine)
 
+Requires Python **3.12 or newer** — the system Python of a stock machine
+(e.g. 3.9.6 on macOS) will not work directly, so create a venv first. If you
+have `uv`, it downloads a matching interpreter itself:
+
 ```bash
-python3.12 -m venv .venv
+uv venv --python 3.12 .venv      # or: python3.12 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
-pip install -e '.[dev]'
+uv pip install -e '.[dev]'       # or: python -m pip install --upgrade pip && pip install -e '.[dev]'
 cp config/assistant.example.yaml config/assistant.yaml
 cp .env.example .env && nano .env   # add AWS credentials
 emike --keyboard --config config/assistant.yaml
 ```
 
-Keyboard mode: press/hold Enter… well, press Enter to start capture, Enter
-again to release. GPIO is not needed for development.
+Keyboard mode: press Enter to start capture, Enter again to release. GPIO is
+not needed for development. Do not call the bare system `pip3` — inside the
+activated venv, `python`/`pip` resolve to 3.12.
 
 ## Raspberry Pi install
 
