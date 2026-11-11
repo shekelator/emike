@@ -6,8 +6,8 @@
       "Effect": "Allow",
       "Action": ["bedrock:InvokeModelWithBidirectionalStream"],
       "Resource": [
-        "arn:aws:bedrock:us-east-1:*:foundation-model/amazon.nova-2-5-sonic",
-        "arn:aws:bedrock:us-east-1:*:foundation-model/amazon.nova-2-sonic-v1:0"
+        "arn:aws:bedrock:us-east-1:261024489445:foundation-model/amazon.nova-2-5-sonic",
+        "arn:aws:bedrock:us-east-1:261024489445:foundation-model/amazon.nova-2-sonic-v1:0"
       ]
     }
   ]
