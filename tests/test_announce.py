@@ -141,15 +141,15 @@ def test_button_wake_pump_forwards_presses_to_the_bus() -> None:
 def test_script_frames_messages_verbatim_with_sender_name() -> None:
     script = build_announcement_script("Dad", ["pizza at six", "call the plumber"])
 
-    assert script.startswith("You have 2 new messages from Dad on your phone.")
-    assert "read each one aloud to the household" in script.lower()
+    assert script.startswith("Announce to the household that you have 2 new messages from Dad")
+    assert "read each one aloud" in script.lower() and "before anything else" in script.lower()
     assert 'First message: "pizza at six"' in script
     assert 'Second message: "call the plumber"' in script
 
 
 def test_script_singular_wording_for_one_message() -> None:
     script = build_announcement_script("Dad", ["hi"])
-    assert script.startswith("You have 1 new message from Dad")
+    assert script.startswith("Announce to the household that you have 1 new message from Dad")
     assert 'First message: "hi"' in script
 
 
@@ -364,9 +364,9 @@ def test_announcement_streams_silence_then_the_text_triplet(
     assert text_starts[0]["role"] == "USER"
     assert text_starts[0]["interactive"] is True
     text_inputs = [e["event"]["textInput"] for e in sent if "textInput" in e["event"]]
-    announcement_inputs = [t for t in text_inputs if t["content"].startswith("You have")]
+    announcement_inputs = [t for t in text_inputs if t["content"].startswith("Announce to the household")]
     assert len(announcement_inputs) == 1  # the SYSTEM prompt also travels as textInput
-    assert announcement_inputs[0]["content"].startswith("You have 1 new message from someone")
+    assert announcement_inputs[0]["content"].startswith("Announce to the household that you have 1 new message from someone")
     assert '"pizza \'at\' six"' in announcement_inputs[0]["content"]
     assert announcement_inputs[0]["content"].count('"') >= 2  # the frame quotes survive
     # The text triplet must use a content name distinct from the open audio one.
@@ -376,7 +376,7 @@ def test_announcement_streams_silence_then_the_text_triplet(
     # arrives (the SYSTEM prompt's textInput is part of the open handshake).
     announcement_index = next(
         i for i, e in enumerate(sent) if "textInput" in e["event"]
-        and e["event"]["textInput"]["content"].startswith("You have")
+        and e["event"]["textInput"]["content"].startswith("Announce to the household")
     )
     first_audio_index = next(i for i, e in enumerate(sent) if "audioInput" in e["event"])
     assert first_audio_index < announcement_index

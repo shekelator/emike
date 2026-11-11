@@ -232,15 +232,19 @@ def build_announcement_script(sender_name: str, texts: list[str]) -> str:
     read them and add nothing else about the phone conversation. The whole
     script is capped at ``MAX_ANNOUNCEMENT_CHARS``; each message gets a share
     of the room so a full inbox announces everything (trimming a long message
-    instead of dropping it from the batch).
+    instead of dropping it from the batch). Announcing the frame first matters
+    in practice: without it the model sometimes opens with the message body,
+    which is confusing with zero context ("a message from Dad" tells the
+    household what just dinged).
     """
     count = len(texts)
     plural = "" if count == 1 else "s"
     header = (
-        f"You have {count} new message{plural} from {sender_name} on your phone. "
-        "Read each one aloud to the household now, verbatim — do not summarize, "
-        "answer, or comment on them. Do not reveal anything else about the "
-        "phone conversation. After reading them, say you're caught up and close."
+        f"Announce to the household that you have {count} new message{plural} from "
+        f"{sender_name} on their phone — say that before anything else. Then read "
+        "each one aloud, verbatim — do not summarize, answer, or comment on them. "
+        "Do not reveal anything else about the phone conversation. After reading "
+        "them, say you're caught up and close."
     )
     # ~30 characters of label + quote frame per message on top of the text.
     per_message = max(200, (MAX_ANNOUNCEMENT_CHARS - len(header) - 30 * count) // count)
