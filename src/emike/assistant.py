@@ -116,10 +116,21 @@ class AssistantRuntime:
             request_id = uuid.uuid4().hex[:10]
             active, self._active = self._active, None
             if active is not None:
-                # In conversation mode a press ends the conversation; in
-                # push-to-talk it is barge-in (ends the old turn, starts anew).
+                if self._conversation:
+                    # The toggle key: a press while a conversation is running
+                    # just ends it (barge-in inside the conversation is done
+                    # by voice — keep talking over the assistant).
+                    LOGGER.info(
+                        "Press while active — ending the conversation",
+                        extra={"event": "turn_interrupt", "request_id": request_id},
+                    )
+                    active.cancel()
+                    await asyncio.gather(active, return_exceptions=True)
+                    continue
+                # Push-to-talk: the press is barge-in — end the old turn and
+                # start the new one from this same press.
                 LOGGER.info(
-                    "Press while active — ending earlier session",
+                    "Press while active — barge-in",
                     extra={"event": "turn_interrupt", "request_id": request_id},
                 )
                 active.cancel()

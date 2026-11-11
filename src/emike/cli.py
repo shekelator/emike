@@ -47,7 +47,9 @@ def main() -> None:
         raise RuntimeError("GPIO mode requires Linux on Raspberry Pi. Use --keyboard.")
 
     button = (
-        KeyboardButton() if args.keyboard else KeyboardOrGPIOButton(config.hardware.button_gpio)
+        KeyboardButton(alternating=args.push_to_talk)
+        if args.keyboard
+        else KeyboardOrGPIOButton(config.hardware.button_gpio)
     )
     led = create_led(config.hardware.led_gpio)
     runtime = AssistantRuntime(
