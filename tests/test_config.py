@@ -35,6 +35,7 @@ def test_load_config_from_example() -> None:
     assert cfg.messaging.send_window_seconds == 600
     assert cfg.messaging.max_announcements == 10
     assert cfg.messaging.announce_chime is True
+    assert cfg.messaging.announce_during_conversation is False
 
 
 def test_missing_model_id_is_required(tmp_path: Path) -> None:
@@ -99,6 +100,7 @@ messaging:
   send_window_seconds: 300
   max_announcements: 4
   announce_chime: false
+  announce_during_conversation: true
 """,
         encoding="utf-8",
     )
@@ -111,6 +113,7 @@ messaging:
     assert cfg.messaging.send_window_seconds == 300
     assert cfg.messaging.max_announcements == 4
     assert cfg.messaging.announce_chime is False
+    assert cfg.messaging.announce_during_conversation is True
 
 
 def test_messaging_absent_section_defaults_disabled(tmp_path: Path) -> None:
@@ -142,4 +145,20 @@ messaging:
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="poll_timeout_seconds"):
+        load_config(config_path)
+
+
+def test_messaging_non_bool_toggle_rejected(tmp_path: Path) -> None:
+    config_path = tmp_path / "assistant.yaml"
+    config_path.write_text(
+        """
+system_prompt: hello
+sonic:
+  model_id: amazon.nova-2-5-sonic
+messaging:
+  announce_during_conversation: "yes"
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(TypeError, match="announce_during_conversation"):
         load_config(config_path)

@@ -198,10 +198,16 @@ session reads the message text verbatim to the household — no button press.
 Order of operations: ding (played before the session opens, so the cue never
 waits on Bedrock) → the mic never opens; the session streams encoded silence
 and the announcement script travels as USER-role text (Nova Sonic's
-cross-modal input) → the model speaks the messages and says it's caught up →
-back to idle. Multiple pending messages batch into one announcement. Pressing
-the button mid-announcement cancels it (barge-in) and the messages go back to
-the front of the inbox, announcing after that turn ends. A message failing
+cross-modal input) → the model first says how many messages are waiting and
+from whom, reads each verbatim, then says it's caught up → back to idle.
+Multiple pending messages batch into one announcement. Pressing the button
+mid-announcement cancels it (barge-in) and the messages go back to the front
+of the inbox, announcing after that turn ends. By default a message arriving
+mid-turn or mid-conversation is buffered and announced when that turn ends;
+`announce_during_conversation: true` interrupts the running turn/conversation
+instead (the same cancel path a button press takes) so the new message is
+read right away. An announcement in progress is never interrupted by a
+message — it reads the just-arrived one at the next drain. A message failing
 three attempts (errors *or* barge-ins) is dropped with an
 `announcement_dropped` log instead of dinging forever.
 
@@ -229,6 +235,7 @@ three attempts (errors *or* barge-ins) is dropped with an
 | `send_rate_per_minute` / `send_window_seconds` | Rolling-window send bucket (default 5 messages per 600 s). An empty bucket returns "Send limit reached. Try again in a few minutes." instead of failing the turn |
 | `max_announcements` | Inbox cap for pending announcements (a full inbox drops its oldest message) |
 | `announce_chime` | Play the soft ding before messages are read aloud (default true) |
+| `announce_during_conversation` | Interrupt the running turn/conversation to announce a newly arrived message right away, the same cancel path a button press takes (default `false`: the message buffers until the turn ends). An announcement in progress is never interrupted — it reads the new message at the next drain |
 
 ### Behavior and privacy notes
 

@@ -287,6 +287,10 @@ class AssistantRuntime:
         self._wakes = WakeBus()
         self._press_pump = ButtonWakePump(button, self._wakes)
         self._active: asyncio.Task[None] | None = None
+        # What `_active` is: only a turn/conversation may be interrupted by a
+        # newly arrived message (`announce_during_conversation`); an
+        # announcement never is. Set together with `_active` in `_spawn_active`.
+        self._active_is_announcement = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._alarm_task: asyncio.Task[None] | None = None
         self._announce_attempts: dict[int, int] = {}
@@ -343,9 +347,9 @@ class AssistantRuntime:
         Runs on the event loop thread only (the poller hands messages over
         with call_soon_threadsafe), so the inbox needs no lock. Message text
         is never logged. The wake tells an idle runtime to announce
-        immediately; while something is active the wake is harmless — the
-        message sits in the inbox and the loop-top drain picks it up when the
-        announcement/turn finishes.
+        immediately; while a turn or conversation is active the message waits
+        for it to end — or, with ``announce_during_conversation`` on, the wake
+        interrupts it (never an announcement in progress).
         """
         cap = self._config.messaging.max_announcements
         if len(self._inbox) >= cap:
@@ -411,10 +415,19 @@ class AssistantRuntime:
                 return name[:1].upper() + name[1:]
         return "someone"
 
-    def _spawn_active(self, coro: Coroutine[Any, Any, None]) -> None:
-        """Run one turn/announcement as the cancellable ``_active`` task."""
+    def _spawn_active(
+        self, coro: Coroutine[Any, Any, None], *, announcement: bool
+    ) -> None:
+        """Run one turn/announcement as the cancellable ``_active`` task.
+
+        ``announcement`` tags what the task is so a message wake can tell a
+        turn (interruptible to announce a new message when the toggle allows)
+        from an announcement (never interruptible by one — it is itself the
+        thing that will read that message).
+        """
         task = asyncio.create_task(coro)
         task.add_done_callback(self._active_finished)
+        self._active_is_announcement = announcement
         self._active = task
 
     def _active_finished(self, task: asyncio.Task[None]) -> None:
@@ -437,6 +450,9 @@ class AssistantRuntime:
             self._wakes.emit_message()
 
     async def _run(self) -> None:
+        # Declared up front: the two wake branches assign it from differently
+        # narrowed expressions of the same attribute.
+        active: asyncio.Task[None] | None
         self._loop = asyncio.get_running_loop()
         LOGGER.info("Assistant ready", extra={"event": "assistant_ready"})
         self._releases.start()
@@ -454,12 +470,41 @@ class AssistantRuntime:
                 # announcement as `_active` is what keeps press-cancellation
                 # (barge-in) working.
                 request_id = uuid.uuid4().hex[:10]
-                self._spawn_active(self._run_announcement(request_id, self.drain_inbox()))
+                self._spawn_active(
+                    self._run_announcement(request_id, self.drain_inbox()),
+                    announcement=True,
+                )
                 continue
             wake = await self._wakes.wait()
             if not isinstance(wake, PressWake):
-                # A message wake (or an active task that finished) only
-                # re-spins the loop; the top of the loop does the announcing.
+                # A message wake (or an active task that finished) re-spins the
+                # loop; the top of the loop does the announcing. With
+                # announce_during_conversation on, a wake carrying buffered
+                # messages cancels the running turn/conversation through the
+                # same path a press takes, so the messages announce at the
+                # next loop-top instead of after the turn ends. Never cancel
+                # on a bare nudge with an empty inbox, and never an
+                # announcement — it took a fixed batch at spawn and is what
+                # will read what just arrived (the loop-top drains again when
+                # it finishes). The LED needs nothing here: this ends in the
+                # same loop-top IDLE → announcement/turn sequence a press
+                # takes.
+                if (
+                    self._config.messaging.announce_during_conversation
+                    and self._inbox
+                    and self._active is not None
+                    and not self._active.done()
+                    and not self._active_is_announcement
+                ):
+                    request_id = uuid.uuid4().hex[:10]
+                    LOGGER.info(
+                        "Message while active — interrupting the turn to announce",
+                        extra={"event": "turn_interrupt", "request_id": request_id},
+                    )
+                    active, self._active = self._active, None
+                    self._active_is_announcement = False
+                    active.cancel()
+                    await asyncio.gather(active, return_exceptions=True)
                 continue
             request_id = uuid.uuid4().hex[:10]
             active, self._active = self._active, None
@@ -488,7 +533,7 @@ class AssistantRuntime:
                 if self._conversation
                 else self._run_turn(request_id)
             )
-            self._spawn_active(turn)
+            self._spawn_active(turn, announcement=False)
 
     async def _run_turn(self, request_id: str) -> None:
         self._led.set_state(LEDState.LISTENING)
@@ -633,7 +678,7 @@ class AssistantRuntime:
             )
         except asyncio.CancelledError:
             LOGGER.info(
-                "Turn cancelled by new press",
+                "Turn cancelled (press barge-in or message interrupt)",
                 extra={
                     "event": "turn_cancelled",
                     "request_id": request_id,
@@ -723,7 +768,7 @@ class AssistantRuntime:
             )
         except asyncio.CancelledError:
             LOGGER.info(
-                "Conversation ended by press",
+                "Conversation cancelled (press or message interrupt)",
                 extra={
                     "event": "conversation_ended",
                     "request_id": request_id,

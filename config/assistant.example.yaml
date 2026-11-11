@@ -54,6 +54,11 @@ messaging:
   max_announcements: 10
   # Soft ding before incoming messages are read aloud (false = silent).
   announce_chime: true
+  # Interrupt the running turn/conversation to announce a message right away
+  # (same cancel path as a button press). Default false: the message buffers
+  # and announces when the active turn ends. An announcement in progress is
+  # never interrupted — it reads what just arrived next.
+  announce_during_conversation: false
 
 default_location: Jamaica Plain, MA 02130
 search_provider: auto

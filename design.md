@@ -73,6 +73,17 @@ implemented.
   identity chain: env vars first, then `~/.aws` profiles).
 - Service runtime: systemd user unit (unchanged).
 
+## Update: Messaging (Telegram)
+
+Outbound `send_message` (read back + confirm, rate bucket) and inbound
+wake-and-announce: a Telegram long-poller feeds an in-process inbox; an idle
+box dings and reads allowlisted phone messages verbatim over one mic-less
+Nova Sonic announcement session (batched, requeued on cancel with an
+attempt-drop cap, optionally interrupting a running turn via
+`announce_during_conversation`). The full design — decisions, security
+notes, and phasing — lives in `design-messaging.md` (`README.md` carries the
+setup steps).
+
 ## System Architecture
 ### Components
 - Input control: GPIO push-button abstraction.

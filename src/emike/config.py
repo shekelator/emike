@@ -49,7 +49,9 @@ class MessagingConfig:
     """Telegram messaging: outbound `send_message` tool + inbound
     wake-and-announce (the poller feeds the runtime inbox; `_run_announcement`
     reads it aloud). ``max_announcements`` caps that inbox, ``announce_chime``
-    gates the ding."""
+    gates the ding, and ``announce_during_conversation`` makes a newly arrived
+    message interrupt the running turn/conversation instead of buffering
+    until it ends."""
 
     enabled: bool = False
     poll_timeout_seconds: int = 25
@@ -59,6 +61,7 @@ class MessagingConfig:
     send_window_seconds: int = 600
     max_announcements: int = 10
     announce_chime: bool = True
+    announce_during_conversation: bool = False
 
 
 @dataclass(slots=True)
@@ -144,6 +147,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         raise ValueError(
             f"messaging.max_announcements must be at least 1; got {max_announcements}"
         )
+    announce_during_conversation = messaging_raw.get("announce_during_conversation", False)
+    if not isinstance(announce_during_conversation, bool):
+        raise TypeError("messaging.announce_during_conversation must be a boolean")
 
     enabled_tools_raw = raw.get("enabled_tools", ["weather", "search", "time"])
     if not isinstance(enabled_tools_raw, list):
@@ -206,5 +212,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             send_window_seconds=send_window_seconds,
             max_announcements=max_announcements,
             announce_chime=bool(messaging_raw.get("announce_chime", True)),
+            announce_during_conversation=announce_during_conversation,
         ),
     )

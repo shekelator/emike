@@ -581,3 +581,165 @@ def test_run_loop_waits_for_the_message_wake_when_busy(
             await asyncio.gather(runner, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+# --- the announce_during_conversation toggle -------------------------------------
+
+
+def test_toggle_on_message_cancels_the_active_turn_and_announces_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Toggle on: a message arriving mid-turn interrupts the turn via the
+    same cancel path a press takes, and the buffered announce immediately."""
+    runtime = _runtime()
+    runtime._config.messaging.announce_during_conversation = True
+    turn_cancelled = asyncio.Event()
+    announcements: list[list[IncomingMessage]] = []
+
+    async def fake_turn(request_id: str) -> None:
+        try:
+            await asyncio.Event().wait()  # a running turn that never ends
+        except asyncio.CancelledError:
+            turn_cancelled.set()
+            raise
+
+    async def fake_announcement(request_id: str, messages: list[IncomingMessage]) -> None:
+        announcements.append(list(messages))
+
+    runtime._run_turn = fake_turn  # type: ignore[method-assign]
+    runtime._run_announcement = fake_announcement  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        runner = asyncio.create_task(runtime._run())
+        try:
+            await _until(lambda: runtime._wakes._queue is not None)
+            runtime._wakes.emit_press()
+            await _until(lambda: runtime._active is not None)
+            runtime._on_telegram_message(_message(9))  # arrives mid-turn
+            await asyncio.wait_for(turn_cancelled.wait(), 0.5)
+            await _until(lambda: bool(announcements))
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert turn_cancelled.is_set()
+    assert announcements == [[_message(9)]]
+
+
+def test_toggle_on_message_cancels_an_active_conversation_like_a_press(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In conversation mode a message interrupt behaves like the press that
+    ends the conversation: cancel, then the drain announces the messages."""
+    runtime = _runtime()
+    runtime._config.messaging.announce_during_conversation = True
+    runtime._conversation = True
+    conversation_cancelled = asyncio.Event()
+    announcements: list[list[IncomingMessage]] = []
+
+    async def fake_conversation(request_id: str) -> None:
+        try:
+            await asyncio.Event().wait()  # an ongoing conversation
+        except asyncio.CancelledError:
+            conversation_cancelled.set()
+            raise
+
+    async def fake_announcement(request_id: str, messages: list[IncomingMessage]) -> None:
+        announcements.append(list(messages))
+
+    runtime._run_conversation = fake_conversation  # type: ignore[method-assign]
+    runtime._run_announcement = fake_announcement  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        runner = asyncio.create_task(runtime._run())
+        try:
+            await _until(lambda: runtime._wakes._queue is not None)
+            runtime._wakes.emit_press()  # starts the conversation
+            await _until(lambda: runtime._active is not None)
+            runtime._on_telegram_message(_message(5))  # arrives mid-conversation
+            await asyncio.wait_for(conversation_cancelled.wait(), 0.5)
+            await _until(lambda: bool(announcements))
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert conversation_cancelled.is_set()
+    assert announcements == [[_message(5)]]
+
+
+def test_toggle_on_message_never_cancels_an_active_announcement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The announcement took a fixed batch at spawn and is itself what will
+    read the newly arrived message — a mid-announcement arrival must not
+    cancel it; the extra message announces at the next drain instead."""
+    runtime = _runtime()
+    runtime._config.messaging.announce_during_conversation = True
+    announcement_cancelled = asyncio.Event()
+
+    async def fake_announcement(request_id: str, messages: list[IncomingMessage]) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            announcement_cancelled.set()
+            raise
+
+    runtime._run_announcement = fake_announcement  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        runner = asyncio.create_task(runtime._run())
+        try:
+            await _until(lambda: runtime._wakes._queue is not None)
+            runtime._on_telegram_message(_message(1))
+            await _until(lambda: runtime._active is not None)
+            runtime._on_telegram_message(_message(2))  # arrives mid-announcement
+            await asyncio.sleep(0.05)
+            assert not runtime._active.done()  # the announcement stands
+            assert [m.update_id for m in runtime._inbox] == [2]
+            assert not announcement_cancelled.is_set()
+            # (checked here: cancelling `runner` for cleanup cancels the fake
+            # as a side effect of asyncio.run's loop shutdown)
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_toggle_on_bare_message_wake_with_empty_inbox_does_not_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wake with nothing buffered (e.g. the done-callback's nudge racing a
+    drain) must not cancel a running turn — only real buffered messages may."""
+    runtime = _runtime()
+    runtime._config.messaging.announce_during_conversation = True
+    turn_cancelled = asyncio.Event()
+
+    async def fake_turn(request_id: str) -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            turn_cancelled.set()
+            raise
+
+    runtime._run_turn = fake_turn  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        runner = asyncio.create_task(runtime._run())
+        try:
+            await _until(lambda: runtime._wakes._queue is not None)
+            runtime._wakes.emit_press()
+            await _until(lambda: runtime._active is not None)
+            runtime._wakes.emit_message()  # empty-inbox nudge mid-turn
+            await asyncio.sleep(0.05)
+            assert not runtime._active.done()
+            # Checked inside the scenario: cancelling `runner` for cleanup
+            # cancels the fake via asyncio.run's loop shutdown.
+            assert not turn_cancelled.is_set()
+        finally:
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+    asyncio.run(scenario())

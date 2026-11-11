@@ -1,6 +1,9 @@
 # Messaging feature design — Telegram out/inbound with wake-and-announce
 
-Status: design decisions made (§9), not yet implemented.
+Status: implemented. Phases 1–2 are shipped and verified live (cross-modal
+announcement sessions work on `amazon.nova-2-5-sonic`); phase 3 (§8.3
+hardening — the `announce_during_conversation` toggle plus docs) closes the
+feature. On-device verification items of §7 remain on the Pi checklist.
 
 Feature: (1) anyone at the box can dictate a message that goes to Dave ("Mort")'s phone; (2) Dave replies from his phone and the idle appliance wakes up, plays a chime, and reads the message aloud over a Nova Sonic session — no button press.
 
@@ -81,7 +84,7 @@ class IncomingMessage:
 ### 3.1 Priority model
 
 - **Idle + message** → chime, then one Nova Sonic "announcement session" reads it.
-- **Active conversation + message** → buffered in the inbox; announced when the current turn ends. `announce_during_conversation: false` default (interrupting to read a note is hostile UX; flipping the branch is a future toggle).
+- **Active conversation + message** → buffered in the inbox; announced when the current turn ends. `announce_during_conversation: false` default (interrupting to read a note is hostile UX). When the toggle is true, the runtime cancels the running turn/conversation through the same cancel path a button press takes and the loop drain announces immediately — it never cancels an announcement in progress, which is itself the thing that will read the newly arrived message.
 - **Idle + press while inbox non-empty** → the press wins (a real person takes precedence); pending messages announce after that turn ends.
 - **Multiple queued messages** → batched into *one* announcement session ("You have 2 new messages… First: … Second: …") — conserves the Bedrock session quota and is better to listen to.
 - **Cancellation**: pressing mid-announcement cancels it (barge-in semantics); unannounced messages return to the front of the inbox in original order, with a 3-attempt cap per message before it's dropped and logged (`announcement_dropped`).
@@ -125,7 +128,7 @@ Everything else reuses existing machinery verbatim: `_open_with_deadline` (10 s 
 
 ### 3.4 Risks and fallbacks
 
-- **R1 — does `amazon.nova-2-5-sonic` accept cross-modal USER TEXT?** AWS's doc targets "Nova 2 Sonic" while our primary model is nova-2-5. **Verify early, in phase 2 item 1.** Fallback A: inject as additional SYSTEM content on the same stream (docs suggest prompt-end/prompt-start segmentation on the same stream). Fallback B (robust, still no local TTS): pre-render announcements with **Amazon Polly** (same AWS credentials, boto3 optional dep, effectively free at household volume) and play rendered PCM through `PlaybackQueue` with no Nova session at all.
+- **R1 — does `amazon.nova-2-5-sonic` accept cross-modal USER TEXT?** ~~AWS's doc targets "Nova 2 Sonic" while our primary model is nova-2-5. **Verify early, in phase 2 item 1.**~~ **Verified live: it does.** The announcement injects the script as USER text half a second into the silence stream (`ANNOUNCE_TEXT_DELAY_SECONDS = 0.5`); no fallback was needed (Fallback A: inject as additional SYSTEM content on the same stream; Fallback B (robust, still no local TTS): pre-render announcements with **Amazon Polly** (same AWS credentials, boto3 optional dep, effectively free at household volume) and play rendered PCM through `PlaybackQueue` with no Nova session at all).
 - **R2 — model treats injected text as instructions.** Mitigations: allowlist, send rate limits, and the verbatim-reading prompt framing messages as data.
 - **R3 — silence-stream semantics** (does the model respond only when audio flows?). Phase-2 verification; Fallback B sidesteps streaming entirely.
 
@@ -205,9 +208,9 @@ Manual checklist:
 
 ## 8. Phasing
 
-1. **Phase 1 — outbound + transport plumbing (~1 day).** `messaging.py` (interface + TelegramTransport + poller skeleton + offset persistence + redaction), `MessagingConfig`, `send_message` in `ToolRouter`, system prompt line, unit tests, `.env.example`/README. Poller runs when enabled but stays silent (buffers only).
-2. **Phase 2 — WakeBus + chime + announcement session (~2 days).** `WakeBus`/`ButtonWakePump` (behavior-preserving; verify keyboard toggle + GPIO barge-in first), `chime.py`, `build_user_text_events`, `_run_announcement`, inbox + drain, **early R1 verification on `amazon.nova-2-5-sonic`** (pivot to Fallback B if cross-modal text is rejected).
-3. **Phase 3 — hardening (~0.5 day).** Batching, requeue-on-cancel with attempt cap, `announce_during_conversation` toggle, README/design.md, full manual checklist.
+1. **Phase 1 — outbound + transport plumbing (~1 day).** `messaging.py` (interface + TelegramTransport + poller skeleton + offset persistence + redaction), `MessagingConfig`, `send_message` in `ToolRouter`, system prompt line, unit tests, `.env.example`/README. Poller runs when enabled but stays silent (buffers only). **Shipped.**
+2. **Phase 2 — WakeBus + chime + announcement session (~2 days).** `WakeBus`/`ButtonWakePump` (behavior-preserving; verify keyboard toggle + GPIO barge-in first), `chime.py`, `build_user_text_events`, `_run_announcement`, inbox + drain, **early R1 verification on `amazon.nova-2-5-sonic`** (pivot to Fallback B if cross-modal text is rejected). **Shipped and verified live** (see R1). Batching and requeue-on-cancel with the attempt cap landed here, ahead of phase 3.
+3. **Phase 3 — hardening (~0.5 day).** Requeue-on-cancel with attempt cap and batching (done in phase 2), the `announce_during_conversation` toggle, README/design.md — **this change**. Remaining: the on-device part of the §7 manual checklist (Pi: WiFi-blip recovery, reboot offset persistence, quota check).
 
 ## 9. Open questions — decided by Dave
 
