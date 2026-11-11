@@ -28,22 +28,27 @@ locally.
 
 ## AWS setup (one time)
 
-1. **Enable model access** in the Bedrock console for
-   `amazon.nova-2-5-sonic` (and optionally the fallback
-   `amazon.nova-2-sonic-v1:0`) in your chosen region
-   (us-east-1, us-west-2, eu-north-1, or ap-northeast-1):
-   `console.aws.amazon.com/bedrock/home?region=<region>#/modelaccess`.
-2. **IAM permission.** The Pi's credentials need exactly one Bedrock action:
+1. **Model access is automatic** for Amazon models (Bedrock retired its
+   "model access" page) — nothing to enable in the console. The Pi just needs
+   a supported region (us-east-1, us-west-2, eu-north-1, or ap-northeast-1).
+2. **IAM permission.** The Pi's credentials need Bedrock invoke permission on
+   the Sonic models. Note the **empty account segment** in the resource ARNs
+   (`::`) — foundation models are not account-scoped, and an ARN with the
+   account ID inserted matches nothing, failing with an empty-message
+   `AccessDeniedException`:
 
    ```json
    {
      "Version": "2012-10-17",
      "Statement": [{
        "Effect": "Allow",
-       "Action": ["bedrock:InvokeModelWithBidirectionalStream"],
+       "Action": [
+         "bedrock:InvokeModelWithBidirectionalStream",
+         "bedrock:InvokeModel"
+       ],
        "Resource": [
-         "arn:aws:bedrock:<region>:<account>:foundation-model/amazon.nova-2-5-sonic",
-         "arn:aws:bedrock:<region>:<account>:foundation-model/amazon.nova-2-sonic-v1:0"
+         "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-5-sonic",
+         "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-sonic-v1:0"
        ]
      }]
    }
@@ -75,12 +80,12 @@ locally.
    (what `.env` sets on the Pi — loaded by the systemd unit), then the usual
    `~/.aws` profile files (handy on a dev machine).
 
-**Every turn fails with `AccessDeniedException` (empty message)?** That is
-Bedrock model access, not IAM: the stream opens fine and the refusal arrives
-once the first request chunk is sent. Enable model access for the Sonic model
-IDs in the Bedrock console for your account/region (step 1 above). The log's
-`sonic_model_fallback` event shows which model was refused and which one is
-being retried; `turn_error` includes the model that finally failed.
+**Every turn fails with `AccessDeniedException` (empty message)?** Check the
+IAM policy Resource ARNs first: foundation-model ARNs use the empty account
+segment (`arn:aws:bedrock:us-east-1::foundation-model/...`). An ARN with the
+account ID inserted matches nothing and denies exactly like this. The log's
+`sonic_model_fallback` event shows which model was refused; `turn_error`
+names the model that finally failed.
 
 ## Quick start (developer machine)
 
