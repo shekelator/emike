@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from emike.assistant import AssistantRuntime
 from emike.button import KeyboardButton, KeyboardOrGPIOButton
 from emike.config import DEFAULT_CONFIG_PATH, load_config
+from emike.led import create_led
 from emike.logging_utils import configure_logging
 
 
@@ -37,13 +38,15 @@ def main() -> None:
     button = (
         KeyboardButton() if args.keyboard else KeyboardOrGPIOButton(config.hardware.button_gpio)
     )
-    runtime = AssistantRuntime(config=config, button=button)
+    led = create_led(config.hardware.led_gpio)
+    runtime = AssistantRuntime(config=config, button=button, led=led)
     try:
         runtime.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
         button.close()
+        led.close()
 
 
 if __name__ == "__main__":

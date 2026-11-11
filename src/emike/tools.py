@@ -17,6 +17,10 @@ from emike.config import AppConfig
 _DURATION_PATTERN = re.compile(r"(\d+)\s*(seconds?|minutes?|hours?)", re.IGNORECASE)
 
 
+def _noop_on_timer_elapsed(_message: str) -> None:
+    """Default no-op; timers are dormant unless a runtime wires a callback."""
+
+
 @dataclass(slots=True)
 class ActiveTimer:
     timer_id: str
@@ -373,11 +377,23 @@ class SearchService:
         return f"No search results found for {query}."
 
 
+def _current_time_result() -> str:
+    now = datetime.now().astimezone()
+    return (
+        f"Current local time is {now.strftime('%I:%M %p')} on "
+        f"{now.strftime('%A, %B %d, %Y')}. The time zone is {now.tzname()}."
+    )
+
+
 class ToolRouter:
-    def __init__(self, config: AppConfig, on_timer_elapsed: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        on_timer_elapsed: Callable[[str], None] | None = None,
+    ) -> None:
         self._enabled = {name.lower() for name in config.enabled_tools}
         self._default_location = config.default_location
-        self._timers = TimerManager(on_timer_elapsed)
+        self._timers = TimerManager(on_timer_elapsed or _noop_on_timer_elapsed)
         self._weather = WeatherService(timeout_seconds=config.weather_timeout_seconds)
         self._search = SearchService(
             provider=config.search_provider,
@@ -389,6 +405,20 @@ class ToolRouter:
 
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
+
+        if "time" in self._enabled:
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_time",
+                        "description": (
+                            "Get the assistant's current time, date, and timezone."
+                        ),
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            )
 
         if "weather" in self._enabled:
             tools.append(
@@ -523,7 +553,16 @@ class ToolRouter:
 
         return tools
 
+    def get_nova_tool_definitions(self) -> list[dict[str, Any]]:
+        """Tool definitions in the Nova Sonic toolSpec format."""
+        from emike.sonic_events import openai_tool_to_tool_spec
+
+        return [openai_tool_to_tool_spec(defn) for defn in self.get_tool_definitions()]
+
     def execute_tool_call(self, tool_name: str, args: dict[str, Any]) -> str:
+        if tool_name == "get_current_time":
+            return _current_time_result()
+
         if tool_name == "get_weather":
             location = str(args.get("location", self._default_location)).strip()
             if not location:
