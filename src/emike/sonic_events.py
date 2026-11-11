@@ -128,6 +128,53 @@ def build_system_prompt_events(
     ]
 
 
+def build_user_text_events(
+    prompt_name: str,
+    content_name: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    """Inject USER-role text into a live session (the documented cross-modal
+    input). This is what drives the announcement sessions: no mic ever opens,
+    the model speaks back via the normal audio output path.
+
+    Requirements from the docs and verified against ``amazon.nova-2-5-sonic``:
+    the session must already be streaming (open USER AUDIO content flowing),
+    the text gets a FRESH content name, ``interactive`` is true, and the input
+    ``contentEnd`` carries no stopReason (same rule as ending an audio turn).
+    """
+    return [
+        {
+            "event": {
+                "contentStart": {
+                    "promptName": prompt_name,
+                    "contentName": content_name,
+                    "role": "USER",
+                    "type": "TEXT",
+                    "interactive": True,
+                    "textInputConfiguration": {"mediaType": TEXT_MEDIA_TYPE},
+                }
+            }
+        },
+        {
+            "event": {
+                "textInput": {
+                    "promptName": prompt_name,
+                    "contentName": content_name,
+                    "content": text,
+                }
+            }
+        },
+        {
+            "event": {
+                "contentEnd": {
+                    "promptName": prompt_name,
+                    "contentName": content_name,
+                }
+            }
+        },
+    ]
+
+
 def build_audio_content_start(
     prompt_name: str,
     content_name: str,

@@ -46,12 +46,10 @@ class SonicConfig:
 
 @dataclass(slots=True)
 class MessagingConfig:
-    """Telegram messaging (phase 1: outbound tool + inbound poller scaffold).
-
-    ``max_announcements`` and ``announce_chime`` are parsed now but only used
-    by later phases (announcement batching / chime); they round-trip through
-    the config so the YAML surface is stable.
-    """
+    """Telegram messaging: outbound `send_message` tool + inbound
+    wake-and-announce (the poller feeds the runtime inbox; `_run_announcement`
+    reads it aloud). ``max_announcements`` caps that inbox, ``announce_chime``
+    gates the ding."""
 
     enabled: bool = False
     poll_timeout_seconds: int = 25

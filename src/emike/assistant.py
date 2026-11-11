@@ -1,13 +1,18 @@
 """Assistant runtime built on Amazon Nova Sonic bidirectional streaming.
 
 One asyncio event loop drives everything. Threaded hardware (gpiozero/keyboard,
-PortAudio) crosses into the loop through two narrow bridges:
+PortAudio, the Telegram poller) crosses into the loop through narrow bridges
+that feed one wake bus:
 
-- Button presses are awaited via ``asyncio.to_thread``.
-- Button releases feed a single "release pump" thread that increments a
-  counter; mic streaming compares the counter between chunks. A turn that is
-  cancelled (barge-in) can therefore never strand release tokens and wedge
-  the next turn.
+- Button presses come from a pump thread into the bus; the runtime loop parks
+  on the bus instead of parking in ``to_thread(button.wait_for_press)``, so a
+  press can reach the loop while any other work (announcement, long drain) is
+  in flight.
+- Button releases feed a "release pump" thread that increments a counter;
+  mic streaming compares the counter between chunks. A turn that is cancelled
+  (barge-in) can therefore never strand release tokens and wedge the next turn.
+- Phone messages land from the Telegram poller thread; an idle runtime
+  announces them over a mic-less Nova Sonic session (see `_run_announcement`).
 
 Each button press opens one fresh Nova Sonic session, so a failed or
 interrupted turn reconnects automatically on the next press.
@@ -23,11 +28,14 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from emike.audio import MicStreamer
 from emike.button import ButtonInterface
+from emike.chime import build_message_chime
 from emike.config import AppConfig
 from emike.led import LEDController, LEDState
 from emike.messaging import (
@@ -48,6 +56,7 @@ from emike.sonic_events import (
     build_session_end,
     build_system_prompt_events,
     build_tool_result_events,
+    build_user_text_events,
     classify_output_event,
     encode_pcm_chunk,
     extract_audio_output,
@@ -63,6 +72,126 @@ from emike.timer_alarm import build_timer_alarm_pcm
 from emike.tools import ActiveTimer, ToolRouter
 
 LOGGER = logging.getLogger(__name__)
+
+# How long the announcement session streams silence before the cross-modal
+# text is injected (the docs require an actively streaming session; this has
+# been verified to work at half a second on amazon.nova-2-5-sonic).
+ANNOUNCE_TEXT_DELAY_SECONDS = 0.5
+# Whole-script cap (~same budget as the outbound Telegram message).
+MAX_ANNOUNCEMENT_CHARS = 4000
+# Failed announcement attempts kept per message before it is dropped. A press
+# barge-in counts as one attempt: without a cap, pressing mid-announcement
+# would ding and retry forever.
+MAX_ANNOUNCE_ATTEMPTS = 3
+_ANNOUNCE_ORDINALS = (
+    "First",
+    "Second",
+    "Third",
+    "Fourth",
+    "Fifth",
+    "Sixth",
+    "Seventh",
+    "Eighth",
+    "Ninth",
+    "Tenth",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PressWake:
+    """A button press (GPIO on the Pi, Enter in keyboard mode)."""
+
+
+@dataclass(frozen=True, slots=True)
+class MessageWake:
+    """A non-press nudge: a phone message buffered, or `_active` finished."""
+
+
+PRESS_WAKE = PressWake()
+MESSAGE_WAKE = MessageWake()
+Wake = PressWake | MessageWake
+
+
+class WakeBus:
+    """Press and message wakes from threads into the runtime loop.
+
+    ``wait()`` is the runtime loop's park point — the replacement for
+    ``await asyncio.to_thread(button.wait_for_press)``. ``emit_*`` is safe from
+    any thread: off the loop it crosses with ``call_soon_threadsafe``, and a
+    closed running loop is ignored so shutdown races cannot crash the pump or
+    poller threads late in the process's life.
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # The queue must be created on the running loop; attach() does that.
+        self._queue: asyncio.Queue[Wake] | None = None
+
+    def attach(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the bus to the running loop (called once from `_run`)."""
+        self._loop = loop
+        self._queue = asyncio.Queue()
+
+    def emit_press(self) -> None:
+        self._emit(PRESS_WAKE)
+
+    def emit_message(self) -> None:
+        self._emit(MESSAGE_WAKE)
+
+    def _emit(self, wake: Wake) -> None:
+        loop, queue = self._loop, self._queue
+        if loop is None or queue is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            # Already on the loop thread (e.g. a done callback): queue directly.
+            queue.put_nowait(wake)
+            return
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, wake)
+        except RuntimeError:
+            pass  # the loop closed during shutdown; the thread is on its way out
+
+    async def wait(self) -> Wake:
+        queue = self._queue
+        if queue is None:
+            raise RuntimeError("WakeBus used before attach()")
+        return await queue.get()
+
+
+class ButtonWakePump:
+    """Button presses from one daemon thread into the wake bus.
+
+    Mirrors ``ReleaseCounter`` (which owns ``wait_for_release`` the same way):
+    the thread only blocks in ``wait_for_press`` and then emits one wake. The
+    runtime loop parks on the bus instead of parking in an executor, so a
+    press always reaches the loop — even during an announcement, which is what
+    makes barge-in cancel it.
+
+    The thread is a daemon and deliberately NOT joined at shutdown:
+    ``wait_for_press`` parks with no timeout (a thread-safe acquire / gpiozero's
+    own wait) and has no stop hook, so an unconditional join is exactly the old
+    process-exit hang where ``asyncio.run`` waited up to 300 s for a parked
+    executor thread. cli.py's ``os._exit(0)`` on Ctrl-C tears the process down;
+    a parked daemon simply dies with it. When a KeyboardButton reader hits EOF
+    it releases no further presses either, so this thread stays parked (idle,
+    not spinning) until then.
+    """
+
+    def __init__(self, button: ButtonInterface, wakes: WakeBus) -> None:
+        self._button = button
+        self._wakes = wakes
+
+    def start(self) -> None:
+        threading.Thread(target=self._pump, name="button-wake-pump", daemon=True).start()
+
+    def _pump(self) -> None:
+        while True:
+            self._button.wait_for_press()
+            self._wakes.emit_press()
 
 
 class ReleaseCounter:
@@ -91,6 +220,41 @@ class ReleaseCounter:
             return self._count
 
 
+def _quote_safe(text: str) -> str:
+    """Flatten a phone message into one line and keep the quote frame intact."""
+    return " ".join(text.split()).replace('"', "'")
+
+
+def build_announcement_script(sender_name: str, texts: list[str]) -> str:
+    """The announcement prompt (design §3.3: verbatim-message policy).
+
+    Messages travel inside the script as quoted data — the model is told to
+    read them and add nothing else about the phone conversation. The whole
+    script is capped at ``MAX_ANNOUNCEMENT_CHARS``; each message gets a share
+    of the room so a full inbox announces everything (trimming a long message
+    instead of dropping it from the batch).
+    """
+    count = len(texts)
+    plural = "" if count == 1 else "s"
+    header = (
+        f"You have {count} new message{plural} from {sender_name} on your phone. "
+        "Read each one aloud to the household now, verbatim — do not summarize, "
+        "answer, or comment on them. Do not reveal anything else about the "
+        "phone conversation. After reading them, say you're caught up and close."
+    )
+    # ~30 characters of label + quote frame per message on top of the text.
+    per_message = max(200, (MAX_ANNOUNCEMENT_CHARS - len(header) - 30 * count) // count)
+    lines = []
+    for index, text in enumerate(texts):
+        label = (
+            f"{_ANNOUNCE_ORDINALS[index]} message"
+            if index < len(_ANNOUNCE_ORDINALS)
+            else f"Message {index + 1}"
+        )
+        lines.append(f'{label}: "{_quote_safe(text)[:per_message]}"')
+    return "\n".join([header, *lines])
+
+
 class AssistantRuntime:
     def __init__(
         self,
@@ -116,9 +280,12 @@ class AssistantRuntime:
             config, on_timer_elapsed=self._on_timer_elapsed, transport=self._telegram_transport
         )
         self._releases = ReleaseCounter(button)
+        self._wakes = WakeBus()
+        self._press_pump = ButtonWakePump(button, self._wakes)
         self._active: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._alarm_task: asyncio.Task[None] | None = None
+        self._announce_attempts: dict[int, int] = {}
 
     def run_forever(self) -> None:
         """Blocking entry point used by the CLI."""
@@ -132,12 +299,11 @@ class AssistantRuntime:
                 poller.stop(join_timeout=5.0)
 
     def _init_messaging(self) -> None:
-        """Phase 1 scaffolding: poll allowlisted chats into a bounded inbox.
+        """Poll allowlisted chats into a bounded inbox (the wake-and-announce
+        consumer reads it — see `_run_announcement`).
 
-        The consumer (wake-and-announce) arrives in a later phase; messages
-        accumulate here, capped at ``max_announcements``. When messaging is
-        disabled or no bot token is present nothing starts and the inbox
-        simply stays empty.
+        When messaging is disabled or no bot token is present nothing starts
+        and the inbox simply stays empty.
         """
         messaging = self._config.messaging
         if not messaging.enabled:
@@ -172,7 +338,10 @@ class AssistantRuntime:
 
         Runs on the event loop thread only (the poller hands messages over
         with call_soon_threadsafe), so the inbox needs no lock. Message text
-        is never logged.
+        is never logged. The wake tells an idle runtime to announce
+        immediately; while something is active the wake is harmless — the
+        message sits in the inbox and the loop-top drain picks it up when the
+        announcement/turn finishes.
         """
         cap = self._config.messaging.max_announcements
         if len(self._inbox) >= cap:
@@ -196,27 +365,98 @@ class AssistantRuntime:
                 "pending": len(self._inbox),
             },
         )
+        self._wakes.emit_message()
 
     def drain_inbox(self) -> list[IncomingMessage]:
-        """Take all pending phone messages (event loop thread only).
-
-        This is the seam a later announcement phase consumes; today nothing
-        calls it and the inbox just accumulates up to its cap.
-        """
+        """Take all pending phone messages (event loop thread only)."""
         messages = self._inbox
         self._inbox = []
         return messages
+
+    def _requeue_messages(self, messages: list[IncomingMessage]) -> None:
+        """Put an unannounced batch back at the front, in order (loop thread).
+
+        Each requeued message carries one more failed attempt (barge-in
+        included); past the cap it is dropped so a persistently failing
+        session or a press-happy household cannot ding and retry forever.
+        """
+        requeued: list[IncomingMessage] = []
+        for message in messages:
+            attempts = self._announce_attempts.get(message.update_id, 0) + 1
+            if attempts >= MAX_ANNOUNCE_ATTEMPTS:
+                self._announce_attempts.pop(message.update_id, None)
+                LOGGER.warning(
+                    "Announcement dropped after repeated failures",
+                    extra={
+                        "event": "announcement_dropped",
+                        "update_id": message.update_id,
+                        "chat_id": message.chat_id,
+                        "attempts": attempts,
+                    },
+                )
+                continue
+            self._announce_attempts[message.update_id] = attempts
+            requeued.append(message)
+        self._inbox[:0] = requeued
+
+    def _announcement_sender_name(self, chat_id: str) -> str:
+        """Household-facing name for the sender: the configured recipient whose
+        chat id matches (e.g. ``dad`` → "Dad"). Unnamed chats stay generic."""
+        for name, recipient_chat_id in self._config.messaging.recipients.items():
+            if str(recipient_chat_id) == chat_id:
+                return name[:1].upper() + name[1:]
+        return "someone"
+
+    def _spawn_active(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run one turn/announcement as the cancellable ``_active`` task."""
+        task = asyncio.create_task(coro)
+        task.add_done_callback(self._active_finished)
+        self._active = task
+
+    def _active_finished(self, task: asyncio.Task[None]) -> None:
+        """Done callback: nudge the loop so queued messages announce promptly.
+
+        The loop is parked on the wake bus while ``_active`` runs and nothing
+        else wakes it when that finishes, so a buffered message would sit
+        until the next press otherwise. Retrieving the outcome here also keeps
+        asyncio's "exception was never retrieved" warning quiet (the task's
+        own error path already logged it).
+        """
+        if not task.cancelled() and task.exception() is not None:
+            LOGGER.debug(
+                "Active task ended in a logged error", exc_info=task.exception()
+            )
+        # Only nudge when something is actually pending: after a failed turn
+        # with an empty inbox the LED keeps the ERROR pattern until the next
+        # press instead of the loop spin clearing it right away.
+        if self._inbox:
+            self._wakes.emit_message()
 
     async def _run(self) -> None:
         self._loop = asyncio.get_running_loop()
         LOGGER.info("Assistant ready", extra={"event": "assistant_ready"})
         self._releases.start()
+        self._wakes.attach(self._loop)
+        self._press_pump.start()
         poller = self._poller
         if poller is not None:
             poller.start(self._loop)
         while True:
             self._led.set_state(LEDState.IDLE)
-            await asyncio.to_thread(self._button.wait_for_press)
+            if self._active is not None and self._active.done():
+                self._active = None
+            if self._active is None and self._inbox:
+                # Idle with pending phone messages: announce them. Running the
+                # announcement as `_active` is what keeps press-cancellation
+                # (barge-in) working.
+                request_id = uuid.uuid4().hex[:10]
+                self._spawn_active(self._run_announcement(request_id, self.drain_inbox()))
+                continue
+            wake = await self._wakes.wait()
+            if not isinstance(wake, PressWake):
+                # A message wake (or an active task that finished) only
+                # re-spins the loop; the top of the loop does the announcing.
+                continue
             request_id = uuid.uuid4().hex[:10]
             active, self._active = self._active, None
             if active is not None:
@@ -244,7 +484,7 @@ class AssistantRuntime:
                 if self._conversation
                 else self._run_turn(request_id)
             )
-            self._active = asyncio.create_task(turn)
+            self._spawn_active(turn)
 
     async def _run_turn(self, request_id: str) -> None:
         self._led.set_state(LEDState.LISTENING)
@@ -491,7 +731,165 @@ class AssistantRuntime:
             mic.stop()
             playback.stop()
             if session is not None:
-                await self._close_conversation(session, prompt_name, content_name)
+                await self._close_streaming_session(session, prompt_name, content_name)
+
+    async def _run_announcement(
+        self, request_id: str, messages: list[IncomingMessage]
+    ) -> None:
+        """Read pending phone messages aloud over one mic-less Nova session.
+
+        Modeled on ``_run_conversation`` minus the mic: the sender streams
+        encoded silence into an open USER AUDIO content (the docs require an
+        actively streaming session for cross-modal text, and this can't trip
+        voice activity detection), the scripted prompt travels as USER text,
+        and ``_receive`` streams the model's spoken reply out through the
+        normal playback path. Messages only leave the inbox on success — an
+        error or a press barge-in requeues them at the front.
+        """
+        started = time.monotonic()
+        self._led.set_state(LEDState.LISTENING)
+        LOGGER.info(
+            "Announcement started",
+            extra={
+                "event": "announcement_started",
+                "request_id": request_id,
+                "messages": len(messages),
+            },
+        )
+        sender_name = self._announcement_sender_name(messages[0].chat_id)
+        script = build_announcement_script(sender_name, [m.text for m in messages])
+        try:
+            if self._config.messaging.announce_chime:
+                # The ding comes first and does not wait on Bedrock: opening
+                # the session takes 1-3 s and the cue must land immediately.
+                await self._play_chime()
+            await self._announce_over_sonic(request_id, script)
+        except asyncio.CancelledError:
+            LOGGER.info(
+                "Announcement cancelled by press",
+                extra={
+                    "event": "announcement_cancelled",
+                    "request_id": request_id,
+                    "duration_seconds": round(time.monotonic() - started, 2),
+                },
+            )
+            self._requeue_messages(messages)
+            raise
+        except Exception as exc:  # noqa: BLE001 - an announcement must not kill the service
+            LOGGER.error(
+                "Announcement failed",
+                extra={
+                    "event": "announcement_error",
+                    "request_id": request_id,
+                    "error": exc_message(exc),
+                },
+            )
+            self._requeue_messages(messages)
+            self._led.set_state(LEDState.ERROR)
+        else:
+            for message in messages:
+                self._announce_attempts.pop(message.update_id, None)
+            LOGGER.info(
+                "Announcement completed",
+                extra={
+                    "event": "announcement_completed",
+                    "request_id": request_id,
+                    "messages": len(messages),
+                    "duration_seconds": round(time.monotonic() - started, 2),
+                },
+            )
+
+    async def _play_chime(self) -> None:
+        """Sound the two-tone ding through its own one-shot playback stream.
+
+        No PlaybackQueue exists between turns, so the chime opens one just for
+        itself (same pattern as the timer alarm). Polling the drain instead of
+        blocking keeps shutdown's cancellation instant.
+        """
+        config = self._config.sonic
+        pcm = build_message_chime(config.output_sample_rate_hz)
+        playback = PlaybackQueue(
+            config.output_sample_rate_hz,
+            prebuffer_ms=50,  # the chime is its own startup transient
+            device=self._config.hardware.output_device,
+        )
+        try:
+            playback.start()
+            playback.put_pcm(pcm)
+            loop = asyncio.get_running_loop()
+            duration = len(pcm) / (2.0 * config.output_sample_rate_hz)
+            deadline = loop.time() + duration + 1.0
+            while not playback.is_drained() and loop.time() < deadline:
+                await asyncio.sleep(0.05)
+        finally:
+            playback.stop()
+
+    async def _announce_over_sonic(self, request_id: str, script: str) -> None:
+        """One announcement session: silence in, cross-modal text, speech out."""
+        config = self._config.sonic
+        playback = PlaybackQueue(
+            config.output_sample_rate_hz, config.prebuffer_ms, self._config.hardware.output_device
+        )
+        prompt_name = uuid.uuid4().hex
+        audio_content_name = uuid.uuid4().hex
+        # Cross-modal text wants a fresh content name, separate from the open
+        # audio content the silence is streaming into.
+        text_content_name = uuid.uuid4().hex
+        session: SonicTurnSession | None = None
+        try:
+            session = await self._open_with_deadline(
+                config.model_id, prompt_name, audio_content_name
+            )
+            LOGGER.info(
+                "Nova Sonic session opened",
+                extra={"event": "session_opened", "request_id": request_id, "model": config.model_id},
+            )
+            playback.start()
+            sender = asyncio.ensure_future(
+                self._stream_silence(session, prompt_name, audio_content_name)
+            )
+            try:
+                # Let the silence stream briefly first so the session is live
+                # when the text triplet arrives (the docs' active-session
+                # requirement; verified working at half a second).
+                await asyncio.sleep(ANNOUNCE_TEXT_DELAY_SECONDS)
+                await session.send_events(
+                    build_user_text_events(prompt_name, text_content_name, script)
+                )
+                await asyncio.wait_for(
+                    self._receive(session, playback, request_id, prompt_name),
+                    timeout=config.turn_timeout_seconds,
+                )
+                await asyncio.to_thread(playback.wait_until_drained, 30.0)
+            finally:
+                await self._drain_sender(sender)
+        finally:
+            playback.stop()
+            if session is not None:
+                await self._close_streaming_session(session, prompt_name, audio_content_name)
+
+    async def _stream_silence(
+        self,
+        session: SonicTurnSession,
+        prompt_name: str,
+        content_name: str,
+    ) -> None:
+        """Stream encoded silence into the open USER AUDIO content until cancelled.
+
+        Keeps the announcement session streaming without opening the mic
+        (which would hear the chime and the model's own voice) and without
+        a contentEnd that could hand the turn to the model early.
+        """
+        chunk_ms = self._config.sonic.chunk_ms
+        samples_per_chunk = int(
+            self._config.sonic.input_sample_rate_hz * chunk_ms / 1000
+        )
+        silence = encode_pcm_chunk(b"\x00\x00" * samples_per_chunk)
+        while True:
+            await asyncio.sleep(chunk_ms / 1000)
+            await session.send_event(
+                build_audio_input(prompt_name, content_name, silence)
+            )
 
     async def _stream_mic_continuously(
         self,
@@ -534,10 +932,15 @@ class AssistantRuntime:
         except Exception:
             LOGGER.debug("Mic sender did not settle", exc_info=True)
 
-    async def _close_conversation(
+    async def _close_streaming_session(
         self, session: SonicTurnSession, prompt_name: str, content_name: str
     ) -> None:
-        """End the open user audio content, then run the normal close sequence."""
+        """End the open user audio content, then run the normal close sequence.
+
+        Used by conversations and announcements alike — both keep one USER
+        AUDIO content open for their whole session, unlike the push-to-talk
+        sender which ends it on button release.
+        """
         try:
             await asyncio.wait_for(
                 session.send_event(build_audio_content_end(prompt_name, content_name)),

@@ -189,11 +189,21 @@ to Nova Sonic's `toolSpec` format automatically.
 
 ## Messaging (Telegram)
 
-Dictate a short message at the box ("send Mort saying pizza at six") and the
+Dictate a short message at the box ("send Dad saying pizza at six") and the
 assistant reads it back exactly, waits for a confirm, and delivers it to an
-allowlisted phone through a Telegram bot. **Phase 1 is outbound only**: replies
-from the phone are received by the running appliance but not yet announced —
-wake-and-announce (chime + read-aloud) lands in a follow-up phase.
+allowlisted phone through a Telegram bot. **Replies are read aloud**: when the
+box is idle, a message plays a soft two-tone ding and one short Nova Sonic
+session reads the message text verbatim to the household — no button press.
+
+Order of operations: ding (played before the session opens, so the cue never
+waits on Bedrock) → the mic never opens; the session streams encoded silence
+and the announcement script travels as USER-role text (Nova Sonic's
+cross-modal input) → the model speaks the messages and says it's caught up →
+back to idle. Multiple pending messages batch into one announcement. Pressing
+the button mid-announcement cancels it (barge-in) and the messages go back to
+the front of the inbox, announcing after that turn ends. A message failing
+three attempts (errors *or* barge-ins) is dropped with an
+`announcement_dropped` log instead of dinging forever.
 
 ### Setup (one time)
 
@@ -217,14 +227,18 @@ wake-and-announce (chime + read-aloud) lands in a follow-up phase.
 | `chat_allowlist` | Chat ids allowed to talk to the box (inbound; drop everything else) |
 | `recipients` | Name → chat id the `send_message` tool may send to (e.g. `mort: "123…9"`) |
 | `send_rate_per_minute` / `send_window_seconds` | Rolling-window send bucket (default 5 messages per 600 s). An empty bucket returns "Send limit reached. Try again in a few minutes." instead of failing the turn |
-| `max_announcements` | Inbox cap (parsed now, used by the announcement phase) |
-| `announce_chime` | Play a soft ding before announcements (parsed now, used by the announcement phase) |
+| `max_announcements` | Inbox cap for pending announcements (a full inbox drops its oldest message) |
+| `announce_chime` | Play the soft ding before messages are read aloud (default true) |
 
 ### Behavior and privacy notes
 
-- **Read back + confirm**: the assistant repeats the dictated message verbatim
-  and only calls `send_message` after an explicit yes; the rate bucket is the
-  backstop.
+- **Read back + confirm** (outbound): the assistant repeats the dictated
+  message verbatim and only calls `send_message` after an explicit yes; the
+  rate bucket is the backstop.
+- **Read verbatim, add nothing** (inbound): the announcement script instructs
+  the model to read each message aloud to the household and reveal nothing
+  else about the phone conversation; the sender's name comes from
+  `messaging.recipients` (e.g. `dad` → "Dad").
 - Message text passes Telegram's cloud in plaintext (bot chats get no
   end-to-end encryption — acceptable for household note-passing).
 - The bot token (`TELEGRAM_BOT_TOKEN`) never appears in logs or exception
@@ -235,8 +249,12 @@ wake-and-announce (chime + read-aloud) lands in a follow-up phase.
 ### Log events this feature adds
 
 `messaging_started`, `messaging_disabled` (no token), `message_received` (chat
-id + length + update id), `message_rejected` (non-allowlisted chat), 
-`transport_error` (with backoff), `inbox_full`, `offset_persist_error`.
+id + length + update id), `message_rejected` (non-allowlisted chat),
+`transport_error` (with backoff), `inbox_full`, `offset_persist_error`,
+`announcement_started` / `announcement_completed` (messages + duration),
+`announcement_cancelled` (press barge-in; messages requeued),
+`announcement_error` (messages requeued, retried), `announcement_dropped`
+(after 3 failed attempts).
 
 ## LED states
 

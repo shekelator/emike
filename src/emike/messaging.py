@@ -1,8 +1,8 @@
-"""Telegram transport and poller for the messaging feature (phase 1).
+"""Telegram transport and poller for the messaging feature.
 
-Phase 1 is scaffolding: the poller runs when ``messaging.enabled`` and feeds a
-small in-process inbox that a later phase (wake-and-announce) will consume.
-No announcement or chime behavior lives here.
+The poller runs when ``messaging.enabled`` and feeds a small in-process inbox;
+the runtime (``emike.assistant``) consumes it with wake-and-announce. No
+announcement or chime behavior lives here — transport only.
 
 Shaped like the existing thread bridges (``ReleaseCounter`` in
 ``emike.assistant``): one daemon thread owns the network; the event loop only

@@ -13,6 +13,7 @@ from emike.sonic_events import (
     build_session_start,
     build_system_prompt_events,
     build_tool_result_events,
+    build_user_text_events,
     classify_output_event,
     encode_pcm_chunk,
     extract_interrupted,
@@ -77,6 +78,29 @@ def test_system_prompt_travels_as_a_system_triplet() -> None:
     assert start["interactive"] is True
     assert events[1]["event"]["textInput"]["content"] == "You are Mike."
     assert events[2]["event"]["contentEnd"]["contentName"] == CONTENT
+
+
+def test_user_text_triplet_shape_matches_cross_modal_contract() -> None:
+    events = build_user_text_events(PROMPT, CONTENT, "Two new messages…")
+
+    assert [next(iter(e["event"])) for e in events] == ["contentStart", "textInput", "contentEnd"]
+    start = events[0]["event"]["contentStart"]
+    assert start["role"] == "USER"
+    assert start["type"] == "TEXT"
+    assert start["interactive"] is True
+    assert start["textInputConfiguration"] == {"mediaType": "text/plain"}
+    assert events[1]["event"]["textInput"]["content"] == "Two new messages…"
+    # No stopReason: the service rejects stopReason on *input* contentEnd.
+    assert events[2]["event"]["contentEnd"] == {"promptName": PROMPT, "contentName": CONTENT}
+
+
+def test_user_text_accepts_a_fresh_content_name() -> None:
+    """The text triplet must not reuse the open audio content's name."""
+    events = build_user_text_events(PROMPT, "text-content-9", "hello")
+
+    assert events[0]["event"]["contentStart"]["contentName"] == "text-content-9"
+    assert events[1]["event"]["textInput"]["contentName"] == "text-content-9"
+    assert events[2]["event"]["contentEnd"]["contentName"] == "text-content-9"
 
 
 def test_user_audio_turn_uses_content_start_and_end() -> None:

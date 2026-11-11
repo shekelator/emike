@@ -50,8 +50,9 @@ messaging:
     # mort: "123456789"
   send_rate_per_minute: 5
   send_window_seconds: 600
-  # Parsed but unused until the announcement phase.
+  # Inbox cap for pending announcements.
   max_announcements: 10
+  # Soft ding before incoming messages are read aloud (false = silent).
   announce_chime: true
 
 default_location: Jamaica Plain, MA 02130
