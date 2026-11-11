@@ -41,4 +41,6 @@ firecrawl_api_key_env: FIRECRAWL_API_KEY
 firecrawl_search_url: https://api.firecrawl.dev/v2/search
 search_timeout_seconds: 10
 weather_timeout_seconds: 10
+# How long a fired timer's alarm sounds (seconds).
+timer_alarm_seconds: 6
 debug_mode: false

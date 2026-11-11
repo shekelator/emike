@@ -65,6 +65,7 @@ class AppConfig:
     firecrawl_search_url: str = "https://api.firecrawl.dev/v2/search"
     search_timeout_seconds: int = 10
     weather_timeout_seconds: int = 10
+    timer_alarm_seconds: int = 6
     debug_mode: bool = False
 
 
@@ -97,6 +98,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     endpointing = str(sonic_raw.get("endpointing_sensitivity", "MEDIUM")).upper()
     input_rate = int(sonic_raw.get("input_sample_rate_hz", 16_000))
     output_rate = int(sonic_raw.get("output_sample_rate_hz", 24_000))
+    timer_alarm_seconds = int(raw.get("timer_alarm_seconds", 6))
+    if timer_alarm_seconds < 1:
+        raise ValueError(f"timer_alarm_seconds must be at least 1; got {timer_alarm_seconds}")
 
     return AppConfig(
         system_prompt=str(_require(raw, "system_prompt")).strip(),
@@ -137,5 +141,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         ),
         search_timeout_seconds=int(raw.get("search_timeout_seconds", 10)),
         weather_timeout_seconds=int(raw.get("weather_timeout_seconds", 10)),
+        timer_alarm_seconds=timer_alarm_seconds,
         debug_mode=bool(raw.get("debug_mode", False)),
     )

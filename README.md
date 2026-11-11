@@ -162,7 +162,8 @@ the current local timestamp), `hardware.button_gpio` / `hardware.led_gpio` /
 `hardware.input_device` / `hardware.output_device` (sounddevice device name
 or index; empty = OS default — check the `mic_opened`/`speaker_opened` log
 lines to see which devices are actually used), `enabled_tools` (`weather`,
-`search`, `time`), `default_location`, and search keys (see below).
+`search`, `time`, `timers`), `default_location`, `timer_alarm_seconds`
+(how long the timer alarm sounds, default 6), and search keys (see below).
 
 ## Tools
 
@@ -171,9 +172,13 @@ lines to see which devices are actually used), `enabled_tools` (`weather`,
   include daily high/low and support today/tomorrow/weekday/date.
 - Web search (`web_search`) — Firecrawl → Brave → DuckDuckGo, keyed from
   `FIRECRAWL_API_KEY` / `BRAVE_API_KEY` in `.env`.
-- Timers are implemented and dormant: set/list/cancel code ships in
-  `src/emike/tools.py` but is not registered unless `timers` is added to
-  `enabled_tools`.
+- Timers (`set_timer`, `list_timers`, `cancel_timer`) — durations accept
+  `duration_seconds` or text like "5 minutes". When a timer fires the log gets
+  a `timer_elapsed` event and the speaker plays an audible alarm (a repeating
+  microwave-style beep pattern synthesized in `src/emike/timer_alarm.py`),
+  which sounds even while the assistant is idle and runs over an active
+  conversation; `timer_alarm_seconds` sets how long it sounds. A timer that
+  fires while another alarm is already sounding does not queue a second one.
 
 Adding a tool = one entry in `ToolRouter.get_tool_definitions()` + one branch
 in `execute_tool_call` (and expose it in `enabled_tools`); the schema converts

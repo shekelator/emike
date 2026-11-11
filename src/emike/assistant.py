@@ -51,7 +51,8 @@ from emike.sonic_events import (
     peak_pcm_amplitude,
 )
 from emike.sonic_session import SonicTurnSession
-from emike.tools import ToolRouter
+from emike.timer_alarm import build_timer_alarm_pcm
+from emike.tools import ActiveTimer, ToolRouter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -99,15 +100,18 @@ class AssistantRuntime:
         self._led = led
         self._conversation = conversation
         self._client = SonicClient(config.sonic)
-        self._tools = ToolRouter(config)
+        self._tools = ToolRouter(config, on_timer_elapsed=self._on_timer_elapsed)
         self._releases = ReleaseCounter(button)
         self._active: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._alarm_task: asyncio.Task[None] | None = None
 
     def run_forever(self) -> None:
         """Blocking entry point used by the CLI."""
         asyncio.run(self._run())
 
     async def _run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         LOGGER.info("Assistant ready", extra={"event": "assistant_ready"})
         self._releases.start()
         while True:
@@ -719,6 +723,75 @@ class AssistantRuntime:
                 payload=payload,
             )
         )
+
+    def _on_timer_elapsed(self, timer: ActiveTimer) -> None:
+        """Timer thread → loop bridge for a fired timer.
+
+        threading.Timer fires on its own thread; like the mic counter it may
+        only touch pure state, and reaches the loop through
+        ``call_soon_threadsafe``.
+        """
+        label = f" ({timer.label})" if timer.label else ""
+        LOGGER.info(
+            f"Timer elapsed — sounding the alarm{label}",
+            extra={
+                "event": "timer_elapsed",
+                "timer_id": timer.timer_id,
+                "label": timer.label,
+                "duration_seconds": timer.duration_seconds,
+            },
+        )
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._start_alarm_task)
+        except RuntimeError:
+            # The loop already closed (shutdown raced a firing timer).
+            pass
+
+    def _start_alarm_task(self) -> None:
+        if self._alarm_task is not None and not self._alarm_task.done():
+            # An alarm is already sounding; a second timer firing into it just
+            # extends nothing — keep it simple and let the running alarm stand.
+            return
+        self._alarm_task = asyncio.create_task(self._play_timer_alarm())
+
+    async def _play_timer_alarm(self) -> None:
+        """Sound one alarm through a one-shot playback stream.
+
+        No PlaybackQueue exists between turns, so the alarm opens its own just
+        for this. A live conversational stream keeps its own queue — both feed
+        the same output device, so the alarm sounds over the assistant's voice,
+        and each side's queue (barge-in clear, mic-duck check) is untouched.
+        """
+        config = self._config.sonic
+        try:
+            pcm = build_timer_alarm_pcm(
+                config.output_sample_rate_hz, self._config.timer_alarm_seconds
+            )
+            playback = PlaybackQueue(
+                config.output_sample_rate_hz,
+                prebuffer_ms=50,  # the alarm is its own startup transient; don't sit behind a prebuffer
+                device=self._config.hardware.output_device,
+            )
+            try:
+                playback.start()
+                playback.put_pcm(pcm)
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + self._config.timer_alarm_seconds + 2.0
+                # Poll instead of a blocking wait: shutdown must be able to
+                # cancel this task instantly rather than strand a thread.
+                while not playback.is_drained() and loop.time() < deadline:
+                    await asyncio.sleep(0.05)
+            finally:
+                playback.stop()
+            # Shutdown's task cancellation re-raises before this except.
+        except Exception:
+            LOGGER.exception(
+                "Timer alarm playback failed",
+                extra={"event": "timer_alarm_error"},
+            )
 
     def _system_prompt(self) -> str:
         """Config prompt plus current local time, prepended to all session input."""

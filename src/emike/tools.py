@@ -17,8 +17,8 @@ from emike.config import AppConfig
 _DURATION_PATTERN = re.compile(r"(\d+)\s*(seconds?|minutes?|hours?)", re.IGNORECASE)
 
 
-def _noop_on_timer_elapsed(_message: str) -> None:
-    """Default no-op; timers are dormant unless a runtime wires a callback."""
+def _noop_on_timer_elapsed(_timer: ActiveTimer) -> None:
+    """Default no-op; timers are silent unless a runtime wires a callback."""
 
 
 @dataclass(slots=True)
@@ -31,7 +31,7 @@ class ActiveTimer:
 
 
 class TimerManager:
-    def __init__(self, on_elapsed: Callable[[str], None]) -> None:
+    def __init__(self, on_elapsed: Callable[[ActiveTimer], None]) -> None:
         self._on_elapsed = on_elapsed
         self._timers: dict[str, tuple[ActiveTimer, threading.Timer]] = {}
         self._lock = threading.Lock()
@@ -53,10 +53,7 @@ class TimerManager:
         def notify() -> None:
             with self._lock:
                 self._timers.pop(timer_id, None)
-            label_text = f" for {label}" if label else ""
-            self._on_elapsed(
-                f"Timer {timer_id} finished{label_text} after {duration_seconds} seconds."
-            )
+            self._on_elapsed(active)
 
         timer = threading.Timer(duration_seconds, notify)
         timer.daemon = True
@@ -389,7 +386,7 @@ class ToolRouter:
     def __init__(
         self,
         config: AppConfig,
-        on_timer_elapsed: Callable[[str], None] | None = None,
+        on_timer_elapsed: Callable[[ActiveTimer], None] | None = None,
     ) -> None:
         self._enabled = {name.lower() for name in config.enabled_tools}
         self._default_location = config.default_location
