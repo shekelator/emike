@@ -17,6 +17,7 @@ from emike.sonic_events import (
     encode_pcm_chunk,
     extract_interrupted,
     openai_tool_to_tool_spec,
+    peak_pcm_amplitude,
 )
 
 PROMPT = "prompt-1"
@@ -26,6 +27,12 @@ CONTENT = "content-1"
 def test_encode_pcm_chunk_matches_base64() -> None:
     pcm = np.array([1, 0, -1]).astype("<i2").tobytes()
     assert encode_pcm_chunk(pcm) == base64.b64encode(pcm).decode("ascii")
+
+
+def test_peak_pcm_amplitude_detects_signal_and_silence() -> None:
+    assert peak_pcm_amplitude(np.zeros(96, dtype="<i2").tobytes()) == 0
+    assert peak_pcm_amplitude(np.array([100, -3000, 5]).astype("<i2").tobytes()) == 3000
+    assert peak_pcm_amplitude(b"") == 0
 
 
 def test_build_session_start_carries_inference_and_endpointing() -> None:

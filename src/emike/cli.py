@@ -26,11 +26,16 @@ def main() -> None:
         action="store_true",
         help="Use keyboard simulation instead of GPIO",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Force DEBUG-level logging (overrides debug_mode in the config)",
+    )
     args = parser.parse_args()
 
     load_dotenv()
     config = load_config(args.config)
-    configure_logging(debug_mode=config.debug_mode)
+    configure_logging(debug_mode=config.debug_mode or args.debug)
 
     if not args.keyboard and os.name != "posix":
         raise RuntimeError("GPIO mode requires Linux on Raspberry Pi. Use --keyboard.")

@@ -12,6 +12,7 @@ instantly for barge-in.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import deque
@@ -19,6 +20,8 @@ from typing import Any
 
 import numpy as np
 import sounddevice as sd
+
+LOGGER = logging.getLogger(__name__)
 
 
 class PlaybackQueue:
@@ -44,6 +47,16 @@ class PlaybackQueue:
             callback=_playback_callback(self),
         )
         self._stream.start()
+        try:
+            device = str(sd.query_devices(self._stream.device).get("name", self._stream.device))
+        except Exception:  # noqa: BLE001 - diagnostics must never break playback
+            device = str(self._stream.device)
+        LOGGER.info(
+            "Speaker open: %s (%d Hz)",
+            device,
+            self._sample_rate_hz,
+            extra={"event": "speaker_opened", "device": device},
+        )
 
     def stop(self) -> None:
         self._stream, stream = None, self._stream
@@ -94,6 +107,10 @@ class PlaybackQueue:
                     return np.zeros(frames, dtype=np.int16)
                 self._started_playing = True
                 self._playing = True
+                LOGGER.info(
+                    "Playback started (%d ms of audio buffered)",
+                    self._prebuffer_bytes * 1000 // (self._sample_rate_hz * 2),
+                )
             out = np.empty(frames, dtype=np.int16)
             filled = 0
             while filled < frames and self._chunks:

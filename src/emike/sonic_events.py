@@ -24,6 +24,18 @@ def encode_pcm_chunk(pcm: bytes) -> str:
     return base64.b64encode(pcm).decode("ascii")
 
 
+def peak_pcm_amplitude(chunk: bytes) -> int:
+    """Peak absolute sample of little-endian int16 PCM (0 means all silence).
+
+    Used for mic diagnostics: a turn that stays at 0 means capture is
+    delivering silence — wrong device or no microphone permission.
+    """
+    peak = 0
+    for i in range(0, len(chunk) - 1, 2):
+        peak = max(peak, abs(int.from_bytes(chunk[i : i + 2], "little", signed=True)))
+    return peak
+
+
 def build_session_start(
     max_tokens: int,
     top_p: float,

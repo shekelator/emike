@@ -94,6 +94,10 @@ Keyboard mode: press Enter to start capture, Enter again to release. GPIO is
 not needed for development. Do not call the bare system `pip3` — inside the
 activated venv, `python`/`pip` resolve to 3.12.
 
+**macOS:** your terminal needs microphone permission (System Settings →
+Privacy & Security → Microphone). Without it, capture runs but delivers
+silence — emike logs a `mic_silent` warning when that happens.
+
 ## Raspberry Pi install
 
 ```bash
@@ -171,12 +175,32 @@ Errors never crash the service: the turn fails, the error is logged
 bash scripts/test.sh      # ruff check src tests && mypy src && pytest -q
 ```
 
-## Structured logging
+## Structured logging and debugging
 
 JSON lines on stdout (journalctl-friendly) with events: `assistant_ready`,
-`user_text`, `assistant_text`, `tool_call`, `tool_error`, `turn_completed`,
-`turn_error`, `turn_interrupt`, `sonic_model_fallback`. Set
-`debug_mode: true` for DEBUG-level output.
+`session_opened` (model in use per turn), `turn_started`, `mic_opened` /
+`speaker_opened` (which devices are used), `user_text`, `assistant_text`,
+`tool_call`, `tool_error`, `turn_completed`, `turn_error`, `turn_interrupt`,
+`mic_silent` (capture is delivering silence — permission or wrong device),
+`sonic_model_fallback`.
+
+Run with `--debug` (or set `debug_mode: true` in the config) to also see the
+live pipeline: `mic_stream` (one line per second with the captured peak
+amplitude — it should be non-zero while you talk), `recording_started`,
+`mic_released`, and one `sonic_event` line per Nova Sonic output event
+(content starts/ends with stop reasons, tool calls, audio chunk sizes).
+
+A normal turn looks like:
+
+```
+{"event": "turn_started"} … {"event": "session_opened", "model": "…"}
+{"event": "mic_opened", "device": "…"} {"event": "user_text", "text": "what time is it"}
+{"event": "assistant_text", "text": "…"} {"event": "turn_completed", "duration_seconds": 5.6}
+```
+
+If a press produces only `turn_started` and then nothing, run with `--debug`
+and check `mic_stream`'s `peak_amplitude`: 0 means silence is being captured
+(device selection or permission), a normal voice peaks in the hundreds.
 
 ## CI
 

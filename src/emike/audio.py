@@ -47,11 +47,26 @@ class MicStreamer:
             callback=_make_callback(self._loop, self._out_queue),
         )
         self._stream.start()
+        LOGGER.info(
+            "Microphone open: %s (%d Hz, %d ms chunks)",
+            _device_name(self._stream.device),
+            self._sample_rate_hz,
+            self._chunk_ms,
+            extra={"event": "mic_opened", "device": _device_name(self._stream.device)},
+        )
 
     def stop(self) -> None:
         stream, self._stream = self._stream, None
         if stream is not None:
             stream.close()
+
+
+def _device_name(device_index: int) -> str:
+    """Best-effort human name of the portaudio device the stream was opened on."""
+    try:
+        return str(sd.query_devices(device_index).get("name", device_index))
+    except Exception:  # noqa: BLE001 - diagnostics must never break capture
+        return f"device {device_index}"
 
 
 def _make_callback(
@@ -64,8 +79,12 @@ def _make_callback(
         indata: Any,
         _frames: int,
         _time: object,
-        _status: object,
+        status: object,
     ) -> None:
+        # Non-empty status flags device trouble (overflow, disabled input, …);
+        # usually rare, so it is safe to log each occurrence at DEBUG.
+        if status:
+            LOGGER.debug("PortAudio device status: %s", status)
         try:
             loop.call_soon_threadsafe(_enqueue, out_queue, indata.copy().tobytes())
         except RuntimeError:
