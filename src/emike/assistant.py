@@ -262,7 +262,7 @@ class AssistantRuntime:
             # initial response until input starts flowing.
             sender = asyncio.ensure_future(
                 self._stream_mic(
-                    session, mic_queue, baseline, prompt_name, content_name, request_id
+                    session, mic_queue, baseline, prompt_name, content_name, request_id, playback
                 )
             )
             try:
@@ -342,7 +342,7 @@ class AssistantRuntime:
             playback.start()
             sender = asyncio.ensure_future(
                 self._stream_mic_continuously(
-                    session, mic_queue, prompt_name, content_name
+                    session, mic_queue, prompt_name, content_name, playback
                 )
             )
             try:
@@ -395,12 +395,26 @@ class AssistantRuntime:
         mic_queue: asyncio.Queue[bytes],
         prompt_name: str,
         content_name: str,
+        playback: PlaybackQueue,
     ) -> None:
-        """Stream mic audio for the whole conversation; no contentEnd until close."""
+        """Stream mic audio for the whole conversation; no contentEnd until close.
+
+        While the assistant is speaking, mic audio is dropped (half-duplex):
+        sitting near the speakers, the microphone hears the model's own voice
+        and the model barge-ins on itself otherwise — the "Hello Mort" echo
+        loop. Capture resumes ``duck_resume_ms`` after playback goes quiet.
+        """
+        resume_at = 0.0
         while True:
             try:
                 chunk = await asyncio.wait_for(mic_queue.get(), timeout=0.05)
             except TimeoutError:
+                continue
+            now = time.monotonic()
+            if self._config.sonic.duck_mic_while_speaking and playback.is_playing():
+                resume_at = now + self._config.sonic.duck_resume_ms / 1000
+                continue
+            if now < resume_at:
                 continue
             await session.send_event(
                 build_audio_input(prompt_name, content_name, encode_pcm_chunk(chunk))
@@ -500,6 +514,7 @@ class AssistantRuntime:
         prompt_name: str,
         content_name: str,
         request_id: str,
+        playback: PlaybackQueue,
     ) -> None:
         """Stream mic audio until button release, then end the user turn."""
         sent = 0
@@ -510,6 +525,8 @@ class AssistantRuntime:
             try:
                 chunk = await asyncio.wait_for(mic_queue.get(), timeout=0.05)
             except TimeoutError:
+                continue
+            if self._config.sonic.duck_mic_while_speaking and playback.is_playing():
                 continue
             await session.send_event(
                 build_audio_input(prompt_name, content_name, encode_pcm_chunk(chunk))

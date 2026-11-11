@@ -20,6 +20,8 @@ class SonicConfig:
     temperature: float = 0.7
     top_p: float = 0.9
     endpointing_sensitivity: str = "MEDIUM"
+    duck_mic_while_speaking: bool = True
+    duck_resume_ms: int = 300
     prebuffer_ms: int = 150
     open_timeout_seconds: float = 10.0
     turn_timeout_seconds: float = 420.0
@@ -113,6 +115,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             temperature=float(sonic_raw.get("temperature", 0.7)),
             top_p=float(sonic_raw.get("top_p", 0.9)),
             endpointing_sensitivity=endpointing,
+            duck_mic_while_speaking=bool(sonic_raw.get("duck_mic_while_speaking", True)),
+            duck_resume_ms=int(sonic_raw.get("duck_resume_ms", 300)),
             prebuffer_ms=int(sonic_raw.get("prebuffer_ms", 150)),
             open_timeout_seconds=float(sonic_raw.get("open_timeout_seconds", 10.0)),
             turn_timeout_seconds=float(sonic_raw.get("turn_timeout_seconds", 420.0)),

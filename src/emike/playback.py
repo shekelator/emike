@@ -91,6 +91,10 @@ class PlaybackQueue:
         with self._condition:
             return self._started_playing and self._queued_bytes == 0
 
+    def is_playing(self) -> bool:
+        with self._condition:
+            return self._playing
+
     def wait_until_drained(self, timeout_s: float) -> bool:
         """Block until playback of everything queued so far finishes."""
         deadline = _monotonic() + timeout_s

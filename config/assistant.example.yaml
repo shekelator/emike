@@ -19,6 +19,8 @@ sonic:
   temperature: 0.7
   top_p: 0.9
   endpointing_sensitivity: MEDIUM
+  duck_mic_while_speaking: true
+  duck_resume_ms: 300
   prebuffer_ms: 150
   open_timeout_seconds: 10.0
   turn_timeout_seconds: 420.0

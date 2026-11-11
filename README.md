@@ -152,6 +152,8 @@ journalctl --user -u emike -f
 | `release_tail_ms` | Silence streamed after button release (the model's endpointing needs a beat of audio after speech stops before it commits the turn) |
 | `max_tokens` / `temperature` / `top_p` | Session inference configuration |
 | `endpointing_sensitivity` | Model-side turn detection: LOW/MEDIUM/HIGH |
+| `duck_mic_while_speaking` | Drop mic audio while the assistant speaks (half-duplex echo suppression — stop the model hearing its own voice when the mic sits near the speakers). Default true; headphones make it optional |
+| `duck_resume_ms` | Grace after playback ends before mic capture flows again |
 | `prebuffer_ms` | Audio buffered before playback starts |
 | `open_timeout_seconds` / `turn_timeout_seconds` | Watchdogs (turn cap stays under Bedrock's 8-minute connection limit) |
 
