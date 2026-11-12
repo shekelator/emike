@@ -68,6 +68,12 @@ class KeyboardButton(ButtonInterface):
             except EOFError:
                 print("Keyboard input ended (EOF); re-run for a new session.")
                 return
+            except OSError:
+                # EOF is not the only way stdin dies: a closed or non-tty
+                # descriptor raises OSError (pytest capture, a service unit
+                # with no controlling terminal). Same outcome as EOF.
+                print("Keyboard input unavailable; re-run for a new session.")
+                return
             self._listening = not self._listening
             self._presses.release()
             if self._alternating:

@@ -31,7 +31,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        # libportaudio2: sounddevice cannot even be imported without it, and
+        # tests import emike.assistant transitively through emike.audio.
         run: |
+          sudo apt-get update && sudo apt-get install -y libportaudio2
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
 

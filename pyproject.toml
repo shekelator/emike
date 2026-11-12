@@ -39,6 +39,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# gpiozero probes every pin factory at import; off-Pi machines (dev and CI)
+# always emit the pin-factory-fallback warning even when the test uses a Null
+# or mock LED ("Falling back from native", "Falling back from lgpio", ...).
+# Noise, not signal.
+filterwarnings = ["ignore:Falling back.*:Warning"]
 
 [tool.ruff]
 line-length = 100
