@@ -243,8 +243,8 @@ def build_announcement_script(sender_name: str, texts: list[str]) -> str:
         f"Announce to the household that you have {count} new message{plural} from "
         f"{sender_name} on their phone — say that before anything else. Then read "
         "each one aloud, verbatim — do not summarize, answer, or comment on them. "
-        "Do not reveal anything else about the phone conversation. After reading "
-        "them, say you're caught up and close."
+        "Do not reveal anything else about the phone conversation. Stop after "
+        "reading the last one."
     )
     # ~30 characters of label + quote frame per message on top of the text.
     per_message = max(200, (MAX_ANNOUNCEMENT_CHARS - len(header) - 30 * count) // count)

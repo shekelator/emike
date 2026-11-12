@@ -199,7 +199,7 @@ Order of operations: ding (played before the session opens, so the cue never
 waits on Bedrock) → the mic never opens; the session streams encoded silence
 and the announcement script travels as USER-role text (Nova Sonic's
 cross-modal input) → the model first says how many messages are waiting and
-from whom, reads each verbatim, then says it's caught up → back to idle.
+from whom, reads each verbatim → back to idle.
 Multiple pending messages batch into one announcement. Pressing the button
 mid-announcement cancels it (barge-in) and the messages go back to the front
 of the inbox, announcing after that turn ends. By default a message arriving

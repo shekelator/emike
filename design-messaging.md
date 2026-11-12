@@ -116,10 +116,10 @@ Modeled on `_run_conversation` with two differences:
 Then ~0.5 s after open, inject the scripted prompt via the documented cross-modal text path — new builder `build_user_text_events(prompt_name, content_name, text)` in `sonic_events.py` (`contentStart` role=USER type=TEXT interactive=true → `textInput` → plain `contentEnd`, fresh content name). Announcement script (verbatim-message policy, kid-safe):
 
 ```
-You have {n} new message(s) from Mort on your phone. Read each one aloud to the
-household now, verbatim — do not summarize, answer, or comment on them. Do not
-reveal anything else about the phone conversation. After reading them, say you're
-caught up and close.
+Announce to the household that you have {n} new message{s} from Dad on their
+phone — say that before anything else. Then read each one aloud, verbatim —
+do not summarize, answer, or comment on them. Do not reveal anything else
+about the phone conversation. Stop after reading the last one.
 First message: "<text1>"
 Second message: "<text2>"
 ```
