@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "emike"
-version = "0.6.0"
-description = "Push-to-talk Raspberry Pi voice assistant"
+version = "0.7.0"
+description = "Push-to-talk Raspberry Pi voice assistant (Amazon Nova Sonic)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "David Nichol" }]
 dependencies = [
@@ -16,14 +16,11 @@ dependencies = [
   "requests>=2.32",
   "python-dotenv>=1.0",
   "sounddevice>=0.4.7",
-  "faster-whisper>=1.1.0",
+  "aws-sdk-bedrock-runtime[awscrt]>=0.12,<0.13",
   "gpiozero>=2.0.1",
 ]
 
 [project.optional-dependencies]
-tts = [
-  "piper-tts>=1.3.0",
-]
 dev = [
   "pytest>=8.3",
   "ruff>=0.7",
@@ -42,13 +39,18 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# gpiozero probes every pin factory at import; off-Pi machines (dev and CI)
+# always emit the pin-factory-fallback warning even when the test uses a Null
+# or mock LED ("Falling back from native", "Falling back from lgpio", ...).
+# Noise, not signal.
+filterwarnings = ["ignore:Falling back.*:Warning"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_unused_configs = true
 strict = true
 mypy_path = "src"
@@ -57,7 +59,10 @@ mypy_path = "src"
 module = [
   "yaml",
   "gpiozero",
-  "faster_whisper",
   "sounddevice",
+  "aws_sdk_bedrock_runtime.*",
+  "smithy_aws_core.*",
+  "awscrt.*",
 ]
 ignore_missing_imports = true
+disallow_untyped_calls = false

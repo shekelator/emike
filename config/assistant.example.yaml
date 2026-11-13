@@ -3,31 +3,31 @@ system_prompt: |
   Reply in one to three short spoken sentences.
   Do not use markdown, lists, emoji, or special symbols.
   If you do not know something, say so directly.
+  When someone at the box asks to send a message to a person's phone, repeat the
+  message back exactly and get them to confirm before calling send_message. Only
+  send a message after that confirmation. When reading an announcement, read the
+  message verbatim and add nothing else about the phone conversation.
 
-llm:
-  provider: openai_compatible
-  endpoint: https://ollama.com/v1/chat/completions
-  model: gpt-oss:20b
-  api_key_env: OLLAMA_API_KEY
-  temperature: 0.6
-  max_tokens: 500
-  timeout_seconds: 90
-
-stt:
-  model: base.en
-  language: en
-  device: cpu
-  compute_type: int8
-
-tts:
-  enabled: true
-  voice_name: en_US-lessac-medium
-  voices_dir: voices
-  auto_download_voice: true
-  # Optional ALSA output override for Raspberry Pi, e.g. plughw:2,0
-  # aplay_device: plughw:2,0
-  # Optional legacy override:
-  # voice_model_path: voices/en_US-lessac-medium.onnx
+sonic:
+  aws_region: us-east-1
+  model_id: amazon.nova-2-5-sonic
+  # Alternative model (no colon suffix). amazon.nova-2-5-sonic and
+  # amazon.nova-2-sonic-v1:0 share the same event schema.
+  fallback_model_id: amazon.nova-2-sonic-v1:0
+  voice_id: tiffany
+  input_sample_rate_hz: 16000
+  output_sample_rate_hz: 24000
+  chunk_ms: 60
+  release_tail_ms: 600
+  max_tokens: 1024
+  temperature: 0.7
+  top_p: 0.9
+  endpointing_sensitivity: MEDIUM
+  duck_mic_while_speaking: true
+  duck_resume_ms: 300
+  prebuffer_ms: 150
+  open_timeout_seconds: 10.0
+  turn_timeout_seconds: 420.0
 
 hardware:
   button_gpio: 17
@@ -36,7 +36,29 @@ hardware:
 enabled_tools:
   - weather
   - search
-  - timers
+  - time
+# Add `messaging` (after wiring chat ids below) to register the send_message tool:
+#  - messaging
+
+# Telegram messaging — see README "Messaging (Telegram)" for setup.
+messaging:
+  enabled: false
+  # Real chat ids come from scripts/telegram/print-chat-ids.py after your bot
+  # receives a message from your phone.
+  chat_allowlist: []
+  recipients:
+    # mort: "123456789"
+  send_rate_per_minute: 5
+  send_window_seconds: 600
+  # Inbox cap for pending announcements.
+  max_announcements: 10
+  # Soft ding before incoming messages are read aloud (false = silent).
+  announce_chime: true
+  # Interrupt the running turn/conversation to announce a message right away
+  # (same cancel path as a button press). Default false: the message buffers
+  # and announces when the active turn ends. An announcement in progress is
+  # never interrupted — it reads what just arrived next.
+  announce_during_conversation: false
 
 default_location: Jamaica Plain, MA 02130
 search_provider: auto
@@ -45,7 +67,6 @@ firecrawl_api_key_env: FIRECRAWL_API_KEY
 firecrawl_search_url: https://api.firecrawl.dev/v2/search
 search_timeout_seconds: 10
 weather_timeout_seconds: 10
+# How long a fired timer's alarm sounds (seconds).
+timer_alarm_seconds: 6
 debug_mode: false
-
-history_turns: 6
-conversation_timeout_seconds: 120
