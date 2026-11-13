@@ -51,7 +51,9 @@ _SEND_SCHEMA: dict[str, Any] = {
 @dataclass(slots=True)
 class ActiveTimer:
     timer_id: str
-    duration_seconds: int
+    # float: TimerManager accepts sub-second durations (threading.Timer does
+    # natively); the model-facing set_timer schema stays in whole seconds.
+    duration_seconds: float
     label: str
     created_at: float
     due_at: float
@@ -63,7 +65,7 @@ class TimerManager:
         self._timers: dict[str, tuple[ActiveTimer, threading.Timer]] = {}
         self._lock = threading.Lock()
 
-    def create_timer(self, duration_seconds: int, label: str) -> ActiveTimer:
+    def create_timer(self, duration_seconds: float, label: str) -> ActiveTimer:
         if duration_seconds <= 0:
             raise ValueError("Timer duration must be positive")
 

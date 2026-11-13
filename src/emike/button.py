@@ -24,6 +24,16 @@ class GPIOButton(ButtonInterface):
         from gpiozero import Button
 
         self._button = Button(pin, pull_up=True, bounce_time=0.05)
+        if self._button.is_pressed:
+            # A stuck button would otherwise start (or end) turn after turn
+            # from the moment the service boots, reading as mysterious
+            # session churn; surface the wiring problem loudly instead.
+            logger.warning(
+                "GPIO button on pin %s reads pressed at startup — it will act "
+                "as if constantly held; check the button wiring",
+                pin,
+                extra={"event": "gpio_pressed_at_startup", "pin": pin},
+            )
 
     def wait_for_press(self) -> None:
         self._button.wait_for_press()

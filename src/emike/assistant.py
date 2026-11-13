@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import os
+import signal
 import threading
 import time
 import uuid
@@ -173,12 +174,12 @@ class ButtonWakePump:
 
     The thread is a daemon and deliberately NOT joined at shutdown:
     ``wait_for_press`` parks with no timeout (a thread-safe acquire / gpiozero's
-    own wait) and has no stop hook, so an unconditional join is exactly the old
-    process-exit hang where ``asyncio.run`` waited up to 300 s for a parked
-    executor thread. cli.py's ``os._exit(0)`` on Ctrl-C tears the process down;
-    a parked daemon simply dies with it. When a KeyboardButton reader hits EOF
-    it releases no further presses either, so this thread stays parked (idle,
-    not spinning) until then.
+    own wait) and has no stop hook, so an unconditional join would recreate the
+    old process-exit hang where ``asyncio.run`` waited up to 300 s for a parked
+    executor thread. The shutdown signal handler cancels the main task instead
+    of blocking on it: this parked daemon simply dies with the process. When a
+    KeyboardButton reader hits EOF it releases no further presses either, so
+    this thread stays parked (idle, not spinning) until then.
     """
 
     def __init__(self, button: ButtonInterface, wakes: WakeBus) -> None:
@@ -294,17 +295,23 @@ class AssistantRuntime:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._alarm_task: asyncio.Task[None] | None = None
         self._announce_attempts: dict[int, int] = {}
+        self._main_task: asyncio.Task[None] | None = None
 
     def run_forever(self) -> None:
         """Blocking entry point used by the CLI."""
         try:
             asyncio.run(self._run())
+        except asyncio.CancelledError:
+            # The loop-level shutdown handler cancelled the main task on
+            # SIGINT/SIGTERM — a clean stop, not an error.
+            pass
         finally:
             poller = self._poller
             if poller is not None:
                 # Bounded best-effort: a long-poll holding the socket may not
-                # release within the join; the thread is daemon either way.
-                poller.stop(join_timeout=5.0)
+                # release within the join; the thread is daemon either way, and
+                # unconfirmed updates are simply re-delivered by Telegram.
+                poller.stop(join_timeout=2.0)
 
     def _init_messaging(self) -> None:
         """Poll allowlisted chats into a bounded inbox (the wake-and-announce
@@ -449,11 +456,45 @@ class AssistantRuntime:
         if self._inbox:
             self._wakes.emit_message()
 
+    def _install_shutdown_handlers(self) -> None:
+        """Wake the loop from its idle select() for SIGINT/SIGTERM shutdown.
+
+        asyncio's Runner handles the first Ctrl+C by *cancelling* the main
+        task instead of raising KeyboardInterrupt — but that queued
+        cancellation is only processed when the loop spins. An idle runtime
+        rests in selector.select(), PEP 475's syscall retry starves it, and
+        Ctrl+C is swallowed forever (verified live: the main thread parked in
+        epoll with a cancel sitting in _ready). A loop-level handler arrives
+        through the loop's self-pipe, which reliably wakes select(), and it
+        makes SIGTERM (``systemctl stop``) a clean shutdown too.
+        """
+        self._main_task = asyncio.current_task()
+        loop = self._loop
+        assert loop is not None  # set by _run before this is called
+
+        def shutdown(sig: signal.Signals) -> None:
+            LOGGER.info(
+                "Shutdown signal received",
+                extra={"event": "shutdown_signal", "signal": int(sig)},
+            )
+            task = self._main_task
+            if task is not None and not task.done():
+                task.cancel()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, shutdown, sig)
+            except NotImplementedError:
+                # Windows has no loop-level signal handlers; Ctrl+C there goes
+                # through the Runner path when the loop happens to be wakeful.
+                continue
+
     async def _run(self) -> None:
         # Declared up front: the two wake branches assign it from differently
         # narrowed expressions of the same attribute.
         active: asyncio.Task[None] | None
         self._loop = asyncio.get_running_loop()
+        self._install_shutdown_handlers()
         LOGGER.info("Assistant ready", extra={"event": "assistant_ready"})
         self._releases.start()
         self._wakes.attach(self._loop)
@@ -552,13 +593,14 @@ class AssistantRuntime:
         if sonic.fallback_model_id and sonic.fallback_model_id != sonic.model_id:
             attempts.append(sonic.fallback_model_id)
         for attempt_index, model_id in enumerate(attempts):
+            saw_output: list[bool] = []
             try:
-                await self._run_turn_once(request_id, model_id)
+                await self._run_turn_once(request_id, model_id, saw_output)
                 return
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - a turn error must not kill the service
-                if attempt_index == len(attempts) - 1:
+                if attempt_index == len(attempts) - 1 or saw_output:
                     LOGGER.error(
                         "Turn failed",
                         extra={
@@ -573,7 +615,10 @@ class AssistantRuntime:
                     # 403 AccessDenied (model access not enabled) and similar
                     # service refusals surface with no model output at all;
                     # a whole fresh turn (session, prompt, mic) then runs on
-                    # the fallback model.
+                    # the fallback model. A session that already produced
+                    # output is NOT retried: its failure happened after the
+                    # model had answered, and a fresh retry would risk
+                    # double-speaking what went out already.
                     LOGGER.warning(
                         "Model %s failed (%s); retrying turn with %s",
                         model_id,
@@ -622,8 +667,14 @@ class AssistantRuntime:
         except Exception:
             LOGGER.debug("Error cleaning up abandoned Nova Sonic open", exc_info=True)
 
-    async def _run_turn_once(self, request_id: str, model_id: str) -> None:
-        """One full turn on one session; raise instead of swallowing errors."""
+    async def _run_turn_once(
+        self, request_id: str, model_id: str, saw_output: list[bool]
+    ) -> None:
+        """One full turn on one session; raise instead of swallowing errors.
+        
+        ``saw_output`` is filled in by the receiver; the caller's fallback
+        decision gates on it (only a silent session is worth a fresh retry).
+        """
         config = self._config.sonic
         hardware = self._config.hardware
         mic_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=64)
@@ -642,7 +693,6 @@ class AssistantRuntime:
         baseline = self._releases.count()
         started = time.monotonic()
         session: SonicTurnSession | None = None
-        saw_output: list[bool] = []
         try:
             session = await self._open_with_deadline(
                 model_id, prompt_name, content_name

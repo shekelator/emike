@@ -62,10 +62,14 @@ def main() -> None:
     )
     try:
         runtime.run_forever()
+        # Normally reached: the runtime's loop-level handler cancels its main
+        # task on SIGINT/SIGTERM and run_forever returns cleanly, so the
+        # finally below (and the runtime's own close-path guards) always run.
+        # This matters for the button: close() releases its state for the
+        # *next* run of the process. The KeyboardInterrupt branch is only the
+        # fallback for platforms without loop signal handlers (Windows).
     except KeyboardInterrupt:
-        # asyncio.run spends up to 300s joining the executor thread parked in
-        # the button wait; an appliance console exit should be immediate.
-        os._exit(0)
+        pass
     finally:
         button.close()
         led.close()
