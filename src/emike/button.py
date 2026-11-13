@@ -75,9 +75,19 @@ class KeyboardButton(ButtonInterface):
                 print("Keyboard input unavailable; re-run for a new session.")
                 return
             self._listening = not self._listening
-            self._presses.release()
             if self._alternating:
-                self._releases.release()
+                # Each Enter is one edge of a turn: the start edge signals the
+                # press, the stop edge signals the release. Releasing both per
+                # Enter would park a release token until ReleaseCounter's
+                # loop consumes it, ending the turn on its first audio chunk.
+                if self._listening:
+                    self._presses.release()
+                else:
+                    self._releases.release()
+            else:
+                # Conversation mode: every Enter is a press (start or end a
+                # conversation — the runtime's cancel path treats it the same).
+                self._presses.release()
 
     def wait_for_press(self) -> None:
         self._presses.acquire()

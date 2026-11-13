@@ -462,7 +462,6 @@ class AssistantRuntime:
         if poller is not None:
             poller.start(self._loop)
         while True:
-            self._led.set_state(LEDState.IDLE)
             if self._active is not None and self._active.done():
                 self._active = None
             if self._active is None and self._inbox:
@@ -475,6 +474,13 @@ class AssistantRuntime:
                     announcement=True,
                 )
                 continue
+            if self._active is None:
+                # Parked idle (nothing running, nothing to announce): return
+                # the LED to idle. Only when truly idle — a wake can land
+                # while a turn or announcement runs, and overwriting its
+                # LISTENING/SPEAKING pattern with IDLE would stick (the task
+                # only re-sets its state on its own transitions).
+                self._led.set_state(LEDState.IDLE)
             wake = await self._wakes.wait()
             if not isinstance(wake, PressWake):
                 # A message wake (or an active task that finished) re-spins the
@@ -486,9 +492,9 @@ class AssistantRuntime:
                 # on a bare nudge with an empty inbox, and never an
                 # announcement — it took a fixed batch at spawn and is what
                 # will read what just arrived (the loop-top drains again when
-                # it finishes). The LED needs nothing here: this ends in the
-                # same loop-top IDLE → announcement/turn sequence a press
-                # takes.
+                # it finishes). The LED needs nothing here: an idle wake keeps
+                # the true IDLE below, and while something is active its LED
+                # state (set by the task itself) must survive this spin-over.
                 if (
                     self._config.messaging.announce_during_conversation
                     and self._inbox
