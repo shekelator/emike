@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from emike.assistant import AssistantRuntime
 from emike.button import KeyboardButton, KeyboardOrGPIOButton
 from emike.config import DEFAULT_CONFIG_PATH, load_config
 from emike.led import create_led
+
+LOGGER = logging.getLogger(__name__)
 from emike.logging_utils import configure_logging
 
 
@@ -39,9 +42,24 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    load_dotenv()
+    env_loaded = load_dotenv()
     config = load_config(args.config)
     configure_logging(debug_mode=config.debug_mode or args.debug)
+    # Names only, never values — this answers "did the credentials even reach
+    # the process" (the classic case: launching from a directory without .env,
+    # or a systemd unit whose EnvironmentFile path is wrong), which otherwise
+    # shows up as open timeouts from IdentityChain probing IMDS.
+    LOGGER.info(
+        "Startup environment check",
+        extra={
+            "event": "startup_env",
+            "env_file_loaded": bool(env_loaded),
+            "aws_key_id_present": bool(os.getenv("AWS_ACCESS_KEY_ID")),
+            "aws_secret_present": bool(os.getenv("AWS_SECRET_ACCESS_KEY")),
+            "aws_session_token_present": bool(os.getenv("AWS_SESSION_TOKEN")),
+            "telegram_token_present": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+        },
+    )
 
     if not args.keyboard and os.name != "posix":
         raise RuntimeError("GPIO mode requires Linux on Raspberry Pi. Use --keyboard.")
