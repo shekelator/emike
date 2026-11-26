@@ -109,8 +109,7 @@ def test_keyboard_or_gpio_button_logs_pin_factory_help(monkeypatch, caplog) -> N
             RuntimeError("Unable to load any default pin factory!")
         ),
     )
-    monkeypatch.setattr("emike.button.KeyboardButton.wait_for_press", lambda self: None)
-    monkeypatch.setattr("emike.button.KeyboardButton.wait_for_release", lambda self: None)
+    monkeypatch.setattr("emike.button.threading.Thread.start", lambda self: None)
 
     with caplog.at_level(logging.WARNING):
         KeyboardOrGPIOButton(pin=17)
