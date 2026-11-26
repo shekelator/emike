@@ -41,9 +41,48 @@ emike is a push-to-talk voice assistant appliance intended to run on a Raspberry
 
 ### Out of Scope (MVP)
 - Wake word detection.
-- Barge-in interruption while TTS is speaking.
 - Smart-home control integrations.
 - GUI kiosk dashboard beyond terminal logs.
+
+## Update (v0.7.0): Amazon Nova Sonic speech-to-speech
+
+The local STT (faster-whisper), LLM (OpenAI-compatible endpoint), and TTS
+(Piper) pipeline was replaced by a single **Amazon Nova Sonic** session on
+Bedrock per button press (model `amazon.nova-2-5-sonic`, fallback
+`amazon.nova-2-sonic-v1:0`, both from config). Barge-in — press during
+playback ends the current turn and starts a new one — is now in scope and
+implemented.
+
+### Current Architecture
+- Input control: GPIO push-button abstraction (unchanged); releases feed a
+  single "release pump" thread that increments a counter, so cancelled turns
+  can never strand release tokens.
+- Audio capture: 16 kHz mono int16 via sounddevice, streamed as base64
+  `audioInput` chunks (60 ms) into the session.
+- Speech-to-speech: Amazon Nova Sonic via Bedrock `InvokeModelWithBidirectionalStream`
+  using the smithy-based `aws-sdk-bedrock-runtime[awscrt]` (the aiohttp
+  transport cannot do duplex streaming). One asyncio event loop; PortAudio
+  callbacks bridge through drop-when-full queues.
+- Playback: sounddevice OutputStream (24 kHz by default) with prebuffer; the
+  receive loop clears it on barge-in notifications.
+- Tools: run locally on a worker thread; `get_current_time`, weather
+  (Open-Meteo), web search (Firecrawl→Brave→DuckDuckGo). Timers remain in the
+  codebase but are not registered by default.
+- LED: driven by assistant state (idle/listening/thinking/speaking/error).
+- Configuration: YAML + .env secrets (AWS credentials via the standard SDK
+  identity chain: env vars first, then `~/.aws` profiles).
+- Service runtime: systemd user unit (unchanged).
+
+## Update: Messaging (Telegram)
+
+Outbound `send_message` (read back + confirm, rate bucket) and inbound
+wake-and-announce: a Telegram long-poller feeds an in-process inbox; an idle
+box dings and reads allowlisted phone messages verbatim over one mic-less
+Nova Sonic announcement session (batched, requeued on cancel with an
+attempt-drop cap, optionally interrupting a running turn via
+`announce_during_conversation`). The full design — decisions, security
+notes, and phasing — lives in `design-messaging.md` (`README.md` carries the
+setup steps).
 
 ## System Architecture
 ### Components
