@@ -222,3 +222,11 @@ See design.md for product scope, architecture, security/privacy assumptions, and
 ```
 python3 -c "from gpiozero import Button; b=Button(17); b.wait_for_press(); print('pressed'); b.wait_for_release(); print('released')"
 ```
+
+If startup logs show `Unable to load any default pin factory!`, install a Raspberry Pi GPIO
+backend in the same venv you use to run `emike`:
+
+```bash
+source .venv/bin/activate
+pip install rpi-lgpio
+```
