@@ -8,10 +8,9 @@ network never blocks capture.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 from typing import Any
-
-import sounddevice as sd
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,9 +36,10 @@ class MicStreamer:
         self._sample_rate_hz = sample_rate_hz
         self._chunk_ms = chunk_ms
         self._device = device
-        self._stream: sd.InputStream | None = None
+        self._stream: Any | None = None
 
     def start(self) -> None:
+        sd = _sounddevice()
         blocksize = max(1, int(self._sample_rate_hz * self._chunk_ms / 1000))
         self._stream = sd.InputStream(
             samplerate=self._sample_rate_hz,
@@ -67,9 +67,14 @@ class MicStreamer:
 def _device_name(device_index: int) -> str:
     """Best-effort human name of the portaudio device the stream was opened on."""
     try:
+        sd = _sounddevice()
         return str(sd.query_devices(device_index).get("name", device_index))
     except Exception:  # noqa: BLE001 - diagnostics must never break capture
         return f"device {device_index}"
+
+
+def _sounddevice() -> Any:
+    return importlib.import_module("sounddevice")
 
 
 def _make_callback(

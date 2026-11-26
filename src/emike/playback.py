@@ -12,6 +12,7 @@ instantly for barge-in.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import threading
 import time
@@ -19,7 +20,6 @@ from collections import deque
 from typing import Any
 
 import numpy as np
-import sounddevice as sd
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,10 +38,11 @@ class PlaybackQueue:
         self._started_playing = False
         self._playing = False
         self._condition = threading.Condition()
-        self._stream: sd.OutputStream | None = None
+        self._stream: Any | None = None
         self._device = device
 
     def start(self) -> None:
+        sd = _sounddevice()
         self._stream = sd.OutputStream(
             samplerate=self._sample_rate_hz,
             channels=1,
@@ -158,3 +159,7 @@ def _playback_callback(playback: PlaybackQueue) -> object:
 
 def _monotonic() -> float:
     return time.monotonic()
+
+
+def _sounddevice() -> Any:
+    return importlib.import_module("sounddevice")
