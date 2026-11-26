@@ -6,6 +6,10 @@ import threading
 logger = logging.getLogger(__name__)
 
 
+def _is_pin_factory_error(exc: BaseException) -> bool:
+    return "Unable to load any default pin factory" in str(exc)
+
+
 class ButtonInterface:
     """Abstraction so we can run with real GPIO or a keyboard fallback."""
 
@@ -123,6 +127,14 @@ class KeyboardOrGPIOButton(ButtonInterface):
                 pin,
                 exc,
             )
+            if _is_pin_factory_error(exc):
+                logger.warning(
+                    "GPIO pin factory is unavailable. On Raspberry Pi, install a GPIO backend "
+                    "inside your venv (for example: pip install rpi-lgpio) and verify wiring "
+                    "with: python3 -c \"from gpiozero import Button; b=Button(%s); "
+                    "b.wait_for_press(); print('pressed'); b.wait_for_release(); print('released')\"",
+                    pin,
+                )
         self._keyboard_button = KeyboardButton()
         self._presses = threading.Semaphore(0)
         self._releases = threading.Semaphore(0)

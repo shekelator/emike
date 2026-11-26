@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 
@@ -101,3 +102,17 @@ def test_keyboard_or_gpio_button_falls_back_when_gpio_unavailable(monkeypatch) -
 
     assert button._gpio_button is None
 
+def test_keyboard_or_gpio_button_logs_pin_factory_help(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(
+        "emike.button.GPIOButton",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("Unable to load any default pin factory!")
+        ),
+    )
+    monkeypatch.setattr("emike.button.threading.Thread.start", lambda self: None)
+
+    with caplog.at_level(logging.WARNING):
+        KeyboardOrGPIOButton(pin=17)
+
+    assert "install a GPIO backend inside your venv" in caplog.text
+    assert "pip install rpi-lgpio" in caplog.text
